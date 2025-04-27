@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grok Web Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        select {
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 100%;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .response, .error {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .response {
+            background-color: #e7f3fe;
+            border: 1px solid #b3d4fc;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>Grok Web Interface</h1>
+    <div class="form-container">
+        <form id="grok-form" method="POST">
+            <label for="question">Ask a question:</label><br>
+            <textarea id="question" name="question" placeholder="Type your question here">{{ question }}</textarea><br>
+            <label for="model">Select Grok Model:</label><br>
+            <select id="model" name="model">
+                <option value="grok-3" {% if selected_model == "grok-3" %}selected{% endif %}>Grok 3</option>
+                <option value="grok-3-mini" {% if selected_model == "grok-3-mini" %}selected{% endif %}>Grok 3 Mini</option>
+            </select><br>
+            <button type="submit">Ask Grok</button>
+        </form>
+    </div>
+    <div id="stream-response" class="response" style="display:none;"></div>
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+    {% if answer %}
+        <div class="response">
+            <h3>Answer:</h3>
+            <p>{{ answer }}</p>
+        </div>
+    {% endif %}
+    <script>
+    document.getElementById('grok-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const question = document.getElementById('question').value;
+        const model = document.getElementById('model').value;
+        const responseDiv = document.getElementById('stream-response');
+        responseDiv.style.display = 'block';
+        responseDiv.innerHTML = '';
+        const resp = await fetch('/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, model })
+        });
+        if (!resp.body) {
+            responseDiv.innerHTML = 'No response body';
+            return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let done = false;
+        while (!done) {
+            const { value, done: doneReading } = await reader.read();
+            done = doneReading;
+            if (value) {
+                responseDiv.innerHTML += decoder.decode(value, { stream: true });
+            }
+        }
+    });
+    </script>
+</body>
+</html>
