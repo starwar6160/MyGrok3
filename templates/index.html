@@ -1,186 +1,122 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" x-data="chatApp()" x-init="init()">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grok Web Interface</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f4f4f9;
-        }
-        h1 {
-            color: #333;
-            text-align: center;
-        }
-        .form-container {
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        textarea {
-            width: 100%;
-            height: 100px;
-            margin-bottom: 10px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            resize: vertical;
-        }
-        select {
-            padding: 8px;
-            margin-bottom: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            width: 100%;
-        }
-        button {
-            background-color: #007bff;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            width: 100%;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        .response, .error {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 4px;
-        }
-        .response {
-            background-color: #e7f3fe;
-            border: 1px solid #b3d4fc;
-            white-space: pre-wrap;
-        }
-        .error {
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grok 多会话</title>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+  <style>
+    body { font-family: sans-serif; display: flex; height: 100vh; margin: 0; }
+    .sidebar { width: 200px; background: #f4f4f9; padding: 10px; box-sizing: border-box; overflow-y: auto; }
+    .sidebar button { width: 100%; margin-bottom: 8px; }
+    .sidebar .list button.active { background: #007bff; color: #fff; }
+    .main { flex: 1; padding: 10px; box-sizing: border-box; display: flex; flex-direction: column; }
+    .chat { flex: 1; overflow-y: auto; margin-top: 10px; white-space: pre-wrap; background: #fff; padding: 10px; border: 1px solid #ccc; }
+    .chat p { margin: 6px 0; }
+    .chat p.user { color: #007bff; }
+    .chat p.assistant { color: #333; }
+    .form { display: flex; gap: 8px; }
+    .form textarea { flex: 1; height: 60px; }
+    .form select, .form button { width: 120px; }
+  </style>
 </head>
 <body>
-    <h1>Grok Web Interface</h1>
-    <div class="form-container">
-        <form id="grok-form" method="POST">
-            <label for="question">Ask a question:</label><br>
-            <textarea id="question" name="question" placeholder="Type your question here">{{ question }}</textarea><br>
-            <label for="model">Select Grok Model:</label><br>
-            <select id="model" name="model">
-                <option value="grok-3" {% if selected_model == "grok-3" %}selected{% endif %}>Grok 3</option>
-                <option value="grok-3-mini" {% if selected_model == "grok-3-mini" %}selected{% endif %}>Grok 3 Mini</option>
-            </select><br>
-            <button type="submit">Ask Grok</button>
-        </form>
+  <div class="sidebar">
+    <button @click="addConversation()">＋ 新会话</button>
+    <div class="list">
+      <template x-for="conv in conversations" :key="conv.id">
+        <button
+          :class="{ active: conv.id === currentId }"
+          @click="selectConversation(conv.id)"
+          x-text="conv.name">
+        </button>
+      </template>
     </div>
-    <div id="stream-response" class="response" style="display:none;"></div>
-    {% if error %}
-        <div class="error">{{ error }}</div>
-    {% endif %}
-    {% if answer %}
-        <div class="response">
-            <h3>Answer:</h3>
-            <p>{{ answer }}</p>
-        </div>
-    {% endif %}
-    <div id="history" class="response" style="background:#fff; color:#222; margin-bottom:20px;"></div>
-    <button id="copy-history" type="button" style="margin:8px 8px 8px 0;">Copy History</button>
-    <button id="clear-history" type="button" style="margin:8px 0;">Clear History</button>
-    <script>
-    // 渲染历史问答
-    function renderHistory() {
-        const historyDiv = document.getElementById('history');
-        const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
-        if (qaList.length === 0) {
-            historyDiv.innerHTML = '<em>No history yet.</em>';
-            return;
-        }
-        historyDiv.innerHTML = '<h3>历史问答：</h3>' + qaList.map(item =>
-            `<div style="margin-bottom:12px; padding:8px; border-bottom:1px solid #eee;">
-                <b>Q:</b> ${item.question.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<br>
-                <b>A:</b> ${item.answer.replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-            </div>`
-        ).join('');
-    }
+  </div>
 
-    // 首次加载渲染历史
-    renderHistory();
+  <div class="main">
+    <div class="form">
+      <textarea x-model="question" placeholder="输入你的问题…"></textarea>
+      <select x-model="model">
+        <option value="grok-3">Grok 3</option>
+        <option value="grok-3-mini">Grok 3 Mini</option>
+      </select>
+      <button @click="send()">发送</button>
+    </div>
+    <div class="chat">
+      <template x-for="msg in getCurrentConversation().messages" :key="msg.timestamp">
+        <p :class="msg.role" x-text="(msg.role==='user'? 'Q: ':'A: ') + msg.content"></p>
+      </template>
+    </div>
+  </div>
 
-    // 复制回退函数
-    function fallbackCopy(text) {
-        const el = document.createElement('textarea');
-        el.value = text;
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand('copy');
-        document.body.removeChild(el);
-        alert('History copied');
-    }
+  <script>
+    function chatApp() {
+      return {
+        conversations: [],
+        currentId: null,
+        question: '',
+        model: 'grok-3-mini',
 
-    document.getElementById('grok-form').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const question = document.getElementById('question').value;
-        const model = document.getElementById('model').value;
-        const responseDiv = document.getElementById('stream-response');
-        responseDiv.style.display = 'block';
-        responseDiv.innerHTML = '';
-        let answer = '';
-        const resp = await fetch('/', {
+        init() {
+          this.conversations = JSON.parse(localStorage.getItem('chats')||'[]');
+          if (!this.conversations.length) this.addConversation();
+          this.currentId = this.conversations[0].id;
+        },
+        save() {
+          localStorage.setItem('chats', JSON.stringify(this.conversations));
+        },
+        addConversation() {
+          const id = Date.now();
+          this.conversations.unshift({
+            id,
+            name: `会话 ${this.conversations.length+1}`,
+            messages: []
+          });
+          this.currentId = id;
+          this.save();
+        },
+        selectConversation(id) {
+          this.currentId = id;
+        },
+        getCurrentConversation() {
+          return this.conversations.find(c=>c.id===this.currentId) || { messages: [] };
+        },
+        async send() {
+          if (!this.question.trim()) return;
+          const q = this.question;
+          this.getCurrentConversation().messages.push({ role: 'user', content: q, timestamp: Date.now() });
+          this.question = '';
+          this.save();
+
+          const resp = await fetch('/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question, model })
-        });
-        if (!resp.body) {
-            responseDiv.innerHTML = 'No response body';
-            return;
-        }
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let done = false;
-        while (!done) {
-            const { value, done: doneReading } = await reader.read();
-            done = doneReading;
-            if (value) {
-                const chunk = decoder.decode(value, { stream: true });
-                responseDiv.innerHTML += chunk;
-                answer += chunk;
+            body: JSON.stringify({ question: q, model: this.model })
+          });
+          if (!resp.body) return;
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let done = false, chunk;
+          while (!done) {
+            const res = await reader.read();
+            done = res.done;
+            if (res.value) {
+              chunk = decoder.decode(res.value, { stream: true });
+              const conv = this.getCurrentConversation();
+              const last = conv.messages[conv.messages.length - 1];
+              if (!last || last.role !== 'assistant') {
+                conv.messages.push({ role: 'assistant', content: chunk, timestamp: Date.now() });
+              } else {
+                last.content += chunk;
+              }
+              this.save();
             }
+          }
         }
-        // 保存到localStorage
-        if (question.trim() && answer.trim()) {
-            const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
-            qaList.push({ question, answer });
-            localStorage.setItem('qaHistory', JSON.stringify(qaList));
-            renderHistory();
-        }
-    });
-
-    // 复制历史
-    document.getElementById('copy-history').addEventListener('click', () => {
-        const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
-        const text = qaList.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text)
-                .then(() => alert('History copied'))
-                .catch(() => fallbackCopy(text));
-        } else {
-            fallbackCopy(text);
-        }
-    });
-
-    // 清空历史
-    document.getElementById('clear-history').addEventListener('click', () => {
-        localStorage.removeItem('qaHistory');
-        renderHistory();
-    });
-    </script>
+      }
+    }
+  </script>
 </body>
 </html>
