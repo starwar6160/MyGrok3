@@ -58,6 +58,7 @@
         .response {
             background-color: #e7f3fe;
             border: 1px solid #b3d4fc;
+            white-space: pre-wrap;
         }
         .error {
             background-color: #f8d7da;
@@ -80,7 +81,6 @@
             <button type="submit">Ask Grok</button>
         </form>
     </div>
-    <div id="history" class="response" style="background:#fff; color:#222; margin-bottom:20px;"></div>
     <div id="stream-response" class="response" style="display:none;"></div>
     {% if error %}
         <div class="error">{{ error }}</div>
@@ -92,6 +92,8 @@
         </div>
     {% endif %}
     <div id="history" class="response" style="background:#fff; color:#222; margin-bottom:20px;"></div>
+    <button id="copy-history" type="button" style="margin:8px 8px 8px 0;">Copy History</button>
+    <button id="clear-history" type="button" style="margin:8px 0;">Clear History</button>
     <script>
     // 渲染历史问答
     function renderHistory() {
@@ -111,6 +113,17 @@
 
     // 首次加载渲染历史
     renderHistory();
+
+    // 复制回退函数
+    function fallbackCopy(text) {
+        const el = document.createElement('textarea');
+        el.value = text;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        alert('History copied');
+    }
 
     document.getElementById('grok-form').addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -148,6 +161,25 @@
             localStorage.setItem('qaHistory', JSON.stringify(qaList));
             renderHistory();
         }
+    });
+
+    // 复制历史
+    document.getElementById('copy-history').addEventListener('click', () => {
+        const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
+        const text = qaList.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text)
+                .then(() => alert('History copied'))
+                .catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
+    });
+
+    // 清空历史
+    document.getElementById('clear-history').addEventListener('click', () => {
+        localStorage.removeItem('qaHistory');
+        renderHistory();
     });
     </script>
 </body>
