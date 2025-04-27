@@ -43,6 +43,10 @@
       </select>
       <button @click="send()">发送</button>
     </div>
+    <div style="margin:8px 0;">
+      <button @click="copyConversation()" type="button">复制会话</button>
+      <button @click="deleteConversation()" type="button">删除会话</button>
+    </div>
     <div class="chat">
       <template x-for="msg in getCurrentConversation().messages" :key="msg.timestamp">
         <p :class="msg.role" x-text="(msg.role==='user'? 'Q: ':'A: ') + msg.content"></p>
@@ -113,6 +117,38 @@
               }
               this.save();
             }
+          }
+        },
+        fallbackCopy(text) {
+          const el = document.createElement('textarea');
+          el.value = text;
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand('copy');
+          document.body.removeChild(el);
+        },
+        copyConversation() {
+          const conv = this.getCurrentConversation();
+          const text = conv.messages.map(msg => (msg.role==='user'? 'Q: ':'A: ') + msg.content).join('\n\n');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text)
+              .then(() => alert('会话内容已复制'))
+              .catch(() => this.fallbackCopy(text));
+          } else {
+            this.fallbackCopy(text);
+            alert('会话内容已复制');
+          }
+        },
+        deleteConversation() {
+          const convIndex = this.conversations.findIndex(c=>c.id===this.currentId);
+          if (convIndex !== -1) {
+            this.conversations.splice(convIndex, 1);
+            if (this.conversations.length) {
+              this.currentId = this.conversations[0].id;
+            } else {
+              this.addConversation();
+            }
+            this.save();
           }
         }
       }
