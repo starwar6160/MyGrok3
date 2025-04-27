@@ -80,6 +80,7 @@
             <button type="submit">Ask Grok</button>
         </form>
     </div>
+    <div id="history" class="response" style="background:#fff; color:#222; margin-bottom:20px;"></div>
     <div id="stream-response" class="response" style="display:none;"></div>
     {% if error %}
         <div class="error">{{ error }}</div>
@@ -90,7 +91,27 @@
             <p>{{ answer }}</p>
         </div>
     {% endif %}
+    <div id="history" class="response" style="background:#fff; color:#222; margin-bottom:20px;"></div>
     <script>
+    // 渲染历史问答
+    function renderHistory() {
+        const historyDiv = document.getElementById('history');
+        const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
+        if (qaList.length === 0) {
+            historyDiv.innerHTML = '<em>No history yet.</em>';
+            return;
+        }
+        historyDiv.innerHTML = '<h3>历史问答：</h3>' + qaList.map(item =>
+            `<div style="margin-bottom:12px; padding:8px; border-bottom:1px solid #eee;">
+                <b>Q:</b> ${item.question.replace(/</g,'&lt;').replace(/>/g,'&gt;')}<br>
+                <b>A:</b> ${item.answer.replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+            </div>`
+        ).join('');
+    }
+
+    // 首次加载渲染历史
+    renderHistory();
+
     document.getElementById('grok-form').addEventListener('submit', async function(e) {
         e.preventDefault();
         const question = document.getElementById('question').value;
@@ -98,6 +119,7 @@
         const responseDiv = document.getElementById('stream-response');
         responseDiv.style.display = 'block';
         responseDiv.innerHTML = '';
+        let answer = '';
         const resp = await fetch('/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -114,8 +136,17 @@
             const { value, done: doneReading } = await reader.read();
             done = doneReading;
             if (value) {
-                responseDiv.innerHTML += decoder.decode(value, { stream: true });
+                const chunk = decoder.decode(value, { stream: true });
+                responseDiv.innerHTML += chunk;
+                answer += chunk;
             }
+        }
+        // 保存到localStorage
+        if (question.trim() && answer.trim()) {
+            const qaList = JSON.parse(localStorage.getItem('qaHistory') || '[]');
+            qaList.push({ question, answer });
+            localStorage.setItem('qaHistory', JSON.stringify(qaList));
+            renderHistory();
         }
     });
     </script>
