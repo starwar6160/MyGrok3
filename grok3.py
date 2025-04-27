@@ -58,8 +58,13 @@ def summarize_history(history, max_chars=2000):
     # 保留最近3条，前面合并成摘要
     recent = history[-3:]
     to_summarize = history[:-3]
-    summary_content = '\n'.join(f"[{msg['role']}]: {msg['content']}" for msg in to_summarize)
-    summary = {'role': 'system', 'content': f'以上为历史摘要：{summary_content[:max_chars//2]}...'}
+    # 用 grok-3-mini 生成摘要
+    summary_prompt = (
+        "请将以下多轮对话内容总结为简明摘要，保留关键信息，适合后续上下文继续：\n" +
+        '\n'.join(f"[{msg['role']}]: {msg['content']}" for msg in to_summarize)
+    )
+    summary_text = get_llm_cached('grok-3-mini', [{"role": "user", "content": summary_prompt}])
+    summary = {'role': 'system', 'content': f'以上为历史摘要：{summary_text}'}
     return [summary] + recent
 
 # Function to query Grok model
