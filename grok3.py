@@ -51,21 +51,28 @@ def get_llm_cached(model, messages, stream=False):
 # 自动摘要历史，超 max_chars 时用 LLM 总结前面的，仅保留最近3条原文
 # 实际生产建议用 LLM 生成摘要，这里用拼接模拟
 
-def summarize_history(history, max_chars=2000):
-    total_chars = sum(len(msg.get('content', '')) for msg in history)
+def summarize_history(history, max_chars=4000, keep_last_n=8, summary_max_len=1000):
+    # 移除已有 system 摘要
+    filtered = [msg for msg in history if msg.get('role') != 'system']
+    total_chars = sum(len(msg.get('content', '')) for msg in filtered)
     if total_chars <= max_chars:
-        return history
-    # 保留最近3条，前面合并成摘要
-    recent = history[-3:]
-    to_summarize = history[:-3]
-    # 用 grok-3-mini 生成摘要
+        return filtered
+    # 保留最近N条，前面合并成摘要
+    recent = filtered[-keep_last_n:]
+    to_summarize = filtered[:-keep_last_n]
+    if not to_summarize:
+        return recent
     summary_prompt = (
-        "请将以下多轮对话内容总结为简明摘要，保留关键信息，适合后续上下文继续：\n" +
-        '\n'.join(f"[{msg['role']}]: {msg['content']}" for msg in to_summarize)
+        f"请用简明但尽量保留细节的方式总结以下多轮对话内容，摘要长度不超过{summary_max_len}字，便于后续上下文继续：\n"
+        + '\n'.join(f"[{msg['role']}]: {msg['content']}" for msg in to_summarize)
     )
     summary_text = get_llm_cached('grok-3-mini', [{"role": "user", "content": summary_prompt}])
-    summary = {'role': 'system', 'content': f'以上为历史摘要：{summary_text}'}
-    return [summary] + recent
+    summary = {'role': 'system', 'content': f'历史摘要：{summary_text}'}
+    new_history = [summary] + recent
+    # 如果还超长，递归摘要
+    if sum(len(msg.get('content', '')) for msg in new_history) > max_chars:
+        return summarize_history(new_history, max_chars, keep_last_n, summary_max_len)
+    return new_history
 
 # Function to query Grok model
 def ask_grok_stream(model, messages):
