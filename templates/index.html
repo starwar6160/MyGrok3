@@ -89,14 +89,17 @@
         async send() {
           if (!this.question.trim()) return;
           const q = this.question;
-          this.getCurrentConversation().messages.push({ role: 'user', content: q, timestamp: Date.now() });
+          const conv = this.getCurrentConversation();
+          conv.messages.push({ role: 'user', content: q, timestamp: Date.now() });
           this.question = '';
           this.save();
+
+          const history = conv.messages.map(m => ({ role: m.role, content: m.content }));
 
           const resp = await fetch('/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: q, model: this.model })
+            body: JSON.stringify({ question: q, model: this.model, history })
           });
           if (!resp.body) return;
 
