@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" x-data="chatApp()" x-init="init()">
+<html lang="en" x-data="chatApp()" x-init="init()" :style="`font-size: ${fontSize}px !important;`">
+<!-- 字体大小响应式绑定在 html -->
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Grok 多会话</title>
   <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
   <style>
@@ -20,7 +21,9 @@
       min-width: 0;
       min-height: 0;
       overflow-x: hidden;
+      transition: font-size 0.2s;
     }
+
     .sidebar {
       width: 200px;
       background: #f4f4f9;
@@ -34,6 +37,7 @@
       margin-bottom: 8px;
       box-sizing: border-box;
       word-break: break-all;
+      font-size: inherit;
     }
     .sidebar .list button.active {
       background: #007bff;
@@ -46,6 +50,7 @@
       display: flex;
       flex-direction: column;
       min-width: 0;
+      font-size: inherit;
     }
     .chat {
       flex: 1;
@@ -57,9 +62,11 @@
       border: 1px solid #ccc;
       min-width: 0;
       word-break: break-word;
+      font-size: inherit;
     }
     .chat p {
       margin: 6px 0;
+      font-size: inherit;
     }
     .chat p.user {
       color: #007bff;
@@ -71,6 +78,8 @@
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      align-items: stretch;
+      font-size: inherit;
     }
     .form textarea {
       flex: 1 1 100px;
@@ -78,16 +87,57 @@
       height: 60px;
       resize: vertical;
       box-sizing: border-box;
+      font-size: inherit;
     }
-    .form select, .form button {
-      width: auto;
-      min-width: 90px;
-      flex: 0 0 auto;
+    .form .model-group {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+      align-items: stretch;
+      font-size: inherit;
+    }
+    .form select.model-select {
+      width: 90px;
+      min-width: 70px;
+      height: 44px;
+      font-size: inherit;
+      padding: 4px 6px;
+    }
+    .form button.send-btn {
+      width: 60px;
+      min-width: 50px;
+      height: 44px;
+      font-size: inherit;
+      padding: 4px 0;
+      border-radius: 6px;
+    }
+    .form select.font-size-select {
+      width: 110px;
+      min-width: 70px;
+      height: 44px;
+      font-size: inherit;
+      margin-left: 6px;
+    }
+    .action-btns button {
+      width: 44px;
+      height: 44px;
+      min-width: 36px;
+      min-height: 36px;
+      border-radius: 8px;
+      font-size: inherit;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      margin-right: 0;
     }
     @media (max-width: 600px) {
       body {
         flex-direction: column;
         height: auto;
+        font-size: inherit;
+        font-size: 19px;
       }
       .sidebar {
         width: 100%;
@@ -105,8 +155,8 @@
         min-width: 80px;
         margin-right: 6px;
         margin-bottom: 0;
-        font-size: 15px;
-        padding: 6px 10px;
+        font-size: 17px;
+        padding: 8px 10px;
       }
       .sidebar .list {
         display: flex;
@@ -126,21 +176,26 @@
       .form textarea {
         width: 100%;
         min-width: 0;
-        font-size: 16px;
+        font-size: 18px;
       }
-      .form select, .form button {
+      .form .model-group {
+        flex-direction: row;
+        gap: 6px;
+      }
+      .form select.model-select, .form button.send-btn, .form select.font-size-select {
         width: 100%;
         min-width: 0;
-        font-size: 16px;
+        font-size: 18px;
+        height: 48px;
       }
       .chat {
         padding: 8px 4px;
-        font-size: 15px;
+        font-size: 16px;
       }
     }
   </style>
 </head>
-<body>
+<body :style="`font-size: ${fontSize}px`">
   <div class="sidebar">
     <button @click="addConversation()">＋ 新会话</button>
     <div class="list">
@@ -157,15 +212,26 @@
   <div class="main">
     <div class="form">
       <textarea x-model="question" placeholder="输入你的问题…"></textarea>
-      <select x-model="model">
-        <option value="grok-3">Grok 3</option>
-        <option value="grok-3-mini">Grok 3 Mini</option>
+      <div class="model-group">
+        <select x-model="model" class="model-select">
+          <option value="grok-3">Grok 3</option>
+          <option value="grok-3-mini">Grok 3 Mini</option>
+        </select>
+        <button class="send-btn" @click="send()">发送</button>
+      </div>
+      <select class="font-size-select" x-model="fontSize">
+        <option value="18">小</option>
+        <option value="20">标准</option>
+        <option value="22">大</option>
+        <option value="24">特大</option>
+        <option value="28">超大</option>
+        <option value="32">极大</option>
+        <option value="36">最大</option>
       </select>
-      <button @click="send()">发送</button>
     </div>
-    <div style="margin:8px 0;">
-      <button @click="copyConversation()" type="button">复制会话</button>
-      <button @click="deleteConversation()" type="button">删除会话</button>
+    <div class="action-btns">
+      <button @click="copyConversation()" type="button" title="复制会话">📋</button>
+      <button @click="deleteConversation()" type="button" title="删除会话">🗑️</button>
     </div>
     <div class="chat">
       <template x-for="msg in getCurrentConversation().messages" :key="msg.timestamp">
@@ -181,6 +247,7 @@
         currentId: null,
         question: '',
         model: 'grok-3-mini',
+        fontSize: localStorage.getItem('fontSize') || '22',
 
         init() {
           this.conversations = JSON.parse(localStorage.getItem('chats')||'[]');
@@ -276,6 +343,12 @@
         }
       }
     }
+    // 字体大小自动保存
+    // Alpine 3.x 支持x-effect
+    // 在html模板中加上：
+    // <div x-effect="localStorage.setItem('fontSize', fontSize)"></div>
   </script>
+<!-- 字体大小变动时自动保存 -->
+<div x-effect="localStorage.setItem('fontSize', fontSize)"></div>
 </body>
 </html>
