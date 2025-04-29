@@ -190,6 +190,19 @@ def index():
         selected_model=selected_model
     )
 
+@app.route("/api/title_summary", methods=["POST"])
+def api_title_summary():
+    data = request.get_json()
+    messages = data.get("messages", [])
+    prompt = (
+        "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
+        + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
+    )
+    title = ask_grok("grok-3-mini", [{"role": "user", "content": prompt}])
+    # 只取前10字，去除空白
+    title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
+    return jsonify({"title": title or "新会话"})
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     data = request.get_json()

@@ -33,10 +33,24 @@ export default function App() {
   };
 
   // 发送消息
-  const sendMessage = async (text) => {
-    // ...
-    // 使用 selectedModel
+  // 用 grok-3-mini 自动归纳标题
+  async function summarizeTitleAI(messages) {
+    try {
+      const response = await fetch("/api/title_summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: messages.slice(0, 10) // 只取前10条，避免太长
+        })
+      });
+      const data = await response.json();
+      return data.title || "新会话";
+    } catch {
+      return "新会话";
+    }
+  }
 
+  const sendMessage = async (text) => {
     if (!text.trim()) return;
     const updated = conversations.map(c =>
       c.id === currentId
@@ -86,6 +100,17 @@ export default function App() {
             }
             return { ...c, messages: msgs };
           })
+        );
+      }
+      // assistant 回复结束后自动归纳标题
+      const conv = conversations.find(c => c.id === currentId);
+      if (conv) {
+        const msgs = [...conv.messages, { role: "assistant", content: result }];
+        const title = await summarizeTitleAI(msgs);
+        setConversations(convs =>
+          convs.map(c =>
+            c.id === currentId ? { ...c, name: title } : c
+          )
         );
       }
     } catch (err) {
