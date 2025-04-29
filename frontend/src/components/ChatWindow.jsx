@@ -12,7 +12,22 @@ export default function ChatWindow({ messages }) {
           className={`msg-bubble ${msg.role}`}
         >
           <span className="msg-label">{msg.role === "user" ? "Q:" : "A:"}</span>
-          <span>{msg.content}</span>
+          {msg.role === "assistant"
+            ? msg.content.split('\n').map((line, i) =>
+                line.trim() === '' ? <br key={i} /> :
+                  line.split(/(?<=[。！？])/g).map((sentence, j, arr) =>
+                    sentence ? (
+                      <span
+                        key={j}
+                        style={{ display: 'block', whiteSpace: 'pre-wrap', marginBottom: j === arr.length - 1 ? 8 : 0 }}
+                      >
+                        {sentence}
+                      </span>
+                    ) : null
+                  )
+              )
+            : <span>{msg.content}</span>
+          }
         </div>
       ))}
     </div>
