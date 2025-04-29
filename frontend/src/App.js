@@ -55,10 +55,34 @@ export default function App() {
     });
   }
   // 兼容原有用法
-  const setConversations = (newConvs) => setConversationsAndCurrentId(newConvs, currentId);
-  const setCurrentId = (id) => setConversationsAndCurrentId(conversations, id);
+  const setConversations = (newConvs) => setState(state => {
+    localStorage.setItem("grok3_conversations", JSON.stringify(typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs));
+    return {
+      conversations: typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs,
+      currentId: state.currentId
+    };
+  });
+  const setCurrentId = (id) => setState(state => {
+    localStorage.setItem("grok3_current_id", String(id));
+    return {
+      conversations: state.conversations,
+      currentId: id
+    };
+  });
 
   const currentConv = conversations.find(c => c.id === currentId);
+
+  // 用 useEffect 监控 currentId/conversations，自动修正无效 currentId
+  React.useEffect(() => {
+    if (!conversations.find(c => c.id === currentId) && conversations.length > 0) {
+      const fallbackId = conversations[0].id;
+      setState(state => {
+        localStorage.setItem("grok3_current_id", String(fallbackId));
+        return { ...state, currentId: fallbackId };
+      });
+    }
+  }, [currentId, conversations]);
+
   console.log('[RENDER] conversations:', conversations);
   console.log('[RENDER] currentId:', currentId);
   console.log('[RENDER] localStorage.grok3_conversations:', localStorage.getItem('grok3_conversations'));
@@ -69,9 +93,12 @@ export default function App() {
   // 新建会话
   const addConversation = () => {
     const newId = Date.now();
-    setConversations([...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }]);
-    setCurrentId(newId);
+    setConversationsAndCurrentId(
+      [...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }],
+      newId
+    );
   };
+
 
   // 删除会话
   const deleteConversation = () => {
@@ -211,7 +238,7 @@ export default function App() {
         addConversation={addConversation}
       />
       <div className="main">
-        <ChatWindow messages={currentConv.messages} />
+        <ChatWindow messages={currentConv ? currentConv.messages : []} />
         <InputBar
           onSend={sendMessage}
           onCopy={copyConversation}
