@@ -41,16 +41,58 @@ export default function App() {
     );
     setConversations(updated);
 
-    // 这里模拟AI回复，实际应fetch后端
-    setTimeout(() => {
+    // 调用后端API获取AI回复
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: text,
+          model: "grok-3-mini", // 可根据UI选择
+          history: updated.find(c => c.id === currentId).messages
+        })
+      });
+      // 流式读取
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let result = "";
+      // 先插入一个空的 assistant 消息
       setConversations(convs =>
         convs.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: "assistant", content: "AI回复：" + text }] }
+            ? { ...c, messages: [...c.messages, { role: "assistant", content: "" }] }
             : c
         )
       );
-    }, 800);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        result += decoder.decode(value);
+        // 实时更新最后一条 assistant 消息内容
+        setConversations(convs =>
+          convs.map(c => {
+            if (c.id !== currentId) return c;
+            const msgs = [...c.messages];
+            // 找到最后一条 assistant 消息并更新
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "assistant") {
+                msgs[i] = { ...msgs[i], content: result };
+                break;
+              }
+            }
+            return { ...c, messages: msgs };
+          })
+        );
+      }
+    } catch (err) {
+      setConversations(convs =>
+        convs.map(c =>
+          c.id === currentId
+            ? { ...c, messages: [...c.messages, { role: "assistant", content: "[AI接口请求失败]" }] }
+            : c
+        )
+      );
+    }
   };
 
   // 复制会话

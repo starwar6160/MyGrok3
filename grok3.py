@@ -1,12 +1,33 @@
 import openai
 import os
 import hashlib
-from flask import Flask, render_template, request, Response, stream_with_context
 import json
 import sqlite3
+import openai
+import os
+import hashlib
+from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
+from pathlib import Path
 
-# Initialize Flask app
-app = Flask(__name__)
+# === React 静态页面托管 ===
+app = Flask(__name__, static_folder="frontend/build", template_folder="frontend/build")
+
+# 允许跨域
+try:
+    from flask_cors import CORS
+    CORS(app)
+except ImportError:
+    pass  # 如果没装CORS，先不报错
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    build_dir = Path(app.static_folder)
+    file_path = build_dir / path
+    if path != "" and file_path.exists():
+        return send_from_directory(build_dir, path)
+    else:
+        return send_from_directory(build_dir, "index.html")
 
 # === SQLite 持久化设置 ===
 DB_PATH = 'chat_history.db'
@@ -53,26 +74,27 @@ def get_llm_cache_key(model, messages):
     return hashlib.md5(key_src.encode('utf-8')).hexdigest()
 
 def get_llm_cached(model, messages, stream=False):
-    key = get_llm_cache_key(model, messages)
-    if key in llm_cache:
-        result = llm_cache[key]
-        if stream:
-            # 若缓存为字符串，模拟流式返回
-            for i in range(0, len(result), 50):
-                yield result[i:i+50]
-            return
-        else:
-            return result
+    # 临时禁用缓存，强制每次都请求 LLM
+    # key = get_llm_cache_key(model, messages)
+    # if key in llm_cache:
+    #     result = llm_cache[key]
+    #     if stream:
+    #         # 若缓存为字符串，模拟流式返回
+    #         for i in range(0, len(result), 50):
+    #             yield result[i:i+50]
+    #         return
+    #     else:
+    #         return result
     # 未命中缓存，调用 LLM
     if stream:
         chunks = []
         for chunk in ask_grok_stream(model, messages):
             chunks.append(chunk)
             yield chunk
-        llm_cache[key] = ''.join(chunks)
+        # llm_cache[key] = ''.join(chunks)
     else:
         result = ask_grok(model, messages)
-        llm_cache[key] = result
+        # llm_cache[key] = result
         return result
 
 # 自动摘要历史，超 max_chars 时用 LLM 总结前面的，仅保留最近3条原文
@@ -120,14 +142,18 @@ def ask_grok_stream(model, messages):
 # 兼容非流式（表单POST）
 def ask_grok(model, messages):
     try:
+        print(f"[ask_grok] model={model!r}, messages={messages!r}")
         response = client.chat.completions.create(
             model=model,
             messages=messages
         )
+        print(f"[ask_grok] response={response}")
         return response.choices[0].message.content
     except openai.NotFoundError as e:
+        print(f"[ask_grok] NotFoundError: {e}")
         return f"API Error: {e}"
     except Exception as e:
+        print(f"[ask_grok] Exception: {e}")
         return f"Unexpected Error: {e}"
 
 @app.route("/", methods=["GET", "POST"])
@@ -178,5 +204,49 @@ def index():
         selected_model=selected_model
     )
 
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.get_json()
+    question = data.get("question", "").strip()
+    selected_model = data.get("model", "grok-3-mini")
+    history = data.get("history", [])
+    conversation_id = data.get("conversation_id") or "default"
+    if not question:
+        return jsonify({"error": "Please enter a question."}), 400
+    # 拼接历史+当前
+    history.append({"role": "user", "content": question})
+    messages = summarize_history(history, max_chars=2000)
+    # 保存用户消息
+    import time
+    save_message_to_db(int(time.time()*1000), 'user', question, conversation_id)
+    print(f"[api_chat] question={question!r}")
+    print(f"[api_chat] model={selected_model!r}")
+    print(f"[api_chat] history={history!r}")
+    answer = get_llm_cached(selected_model, messages)
+    print(f"[api_chat] raw answer={answer!r}, type={type(answer)}")
+    # 如果 answer 是生成器，转为字符串
+    if hasattr(answer, '__iter__') and not isinstance(answer, str):
+        answer = ''.join(answer)
+    print(f"[api_chat] final answer={answer!r}, type={type(answer)}")
+    # 保存AI回复
+    save_message_to_db(int(time.time()*1000), 'assistant', answer, conversation_id)
+    return jsonify({"answer": answer})
+
+import socket
+
+def find_free_port(start_port=5000, max_tries=10):
+    port = start_port
+    for _ in range(max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('0.0.0.0', port)) != 0:
+                return port
+            port += 1
+    raise RuntimeError("No free port found in range.")
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    try:
+        port = find_free_port(5000, 11)
+        print(f" * Flask running on port {port}")
+        app.run(debug=True, host="0.0.0.0", port=port)
+    except Exception as e:
+        print(f"启动失败: {e}")
