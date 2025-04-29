@@ -75,27 +75,13 @@ def get_llm_cache_key(model, messages):
 
 def get_llm_cached(model, messages, stream=False):
     # 临时禁用缓存，强制每次都请求 LLM
-    # key = get_llm_cache_key(model, messages)
-    # if key in llm_cache:
-    #     result = llm_cache[key]
-    #     if stream:
-    #         # 若缓存为字符串，模拟流式返回
-    #         for i in range(0, len(result), 50):
-    #             yield result[i:i+50]
-    #         return
-    #     else:
-    #         return result
-    # 未命中缓存，调用 LLM
     if stream:
         chunks = []
         for chunk in ask_grok_stream(model, messages):
             chunks.append(chunk)
             yield chunk
-        # llm_cache[key] = ''.join(chunks)
     else:
-        result = ask_grok(model, messages)
-        # llm_cache[key] = result
-        return result
+        return ask_grok(model, messages)
 
 # 自动摘要历史，超 max_chars 时用 LLM 总结前面的，仅保留最近3条原文
 # 实际生产建议用 LLM 生成摘要，这里用拼接模拟
@@ -222,15 +208,17 @@ def api_chat():
     print(f"[api_chat] question={question!r}")
     print(f"[api_chat] model={selected_model!r}")
     print(f"[api_chat] history={history!r}")
-    answer = get_llm_cached(selected_model, messages)
-    print(f"[api_chat] raw answer={answer!r}, type={type(answer)}")
-    # 如果 answer 是生成器，转为字符串
-    if hasattr(answer, '__iter__') and not isinstance(answer, str):
-        answer = ''.join(answer)
-    print(f"[api_chat] final answer={answer!r}, type={type(answer)}")
-    # 保存AI回复
-    save_message_to_db(int(time.time()*1000), 'assistant', answer, conversation_id)
-    return jsonify({"answer": answer})
+    def generate():
+        import types
+        answer_chunks = get_llm_cached(selected_model, messages, stream=True)
+        import sys
+        full_answer = ''
+        for chunk in answer_chunks:
+            full_answer += chunk
+            yield chunk
+        # 保存AI回复（只保存一次完整内容）
+        save_message_to_db(int(time.time()*1000), 'assistant', full_answer, conversation_id)
+    return Response(generate(), mimetype='text/plain')
 
 import socket
 
