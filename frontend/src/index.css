@@ -1,0 +1,212 @@
+html, body, #root, .app-root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: sans-serif;
+  box-sizing: border-box;
+}
+
+.app-root {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  width: 180px;
+  background: #f4f4f9;
+  padding: 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar button {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 1em;
+  border: none;
+  background: #eee;
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.sidebar .list button.active {
+  background: #007bff;
+  color: #fff;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+}
+
+.chat {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px;
+  background: #fff;
+  border-bottom: 1px solid #eee;
+}
+
+.msg-bubble {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  max-width: 85%;
+  word-break: break-word;
+  display: inline-block;
+}
+
+.msg-bubble.user {
+  background: #e3f2fd;
+  color: #1565c0;
+  align-self: flex-end;
+  font-weight: bold;
+}
+
+.msg-bubble.assistant {
+  background: #f1f8e9;
+  color: #333;
+}
+
+.msg-label {
+  font-weight: bold;
+  margin-right: 6px;
+}
+
+.input-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px;
+  background: #f8f8fa;
+  border-top: 1px solid #eee;
+  gap: 0;
+}
+.input-bar textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.input-bar-bottom {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.input-bar textarea {
+  flex: 1 1 100px;
+  font-size: 1em;
+  resize: none;
+  border-radius: 8px;
+  border: 1px solid #bbb;
+  padding: 10px;
+  outline: none;
+  transition: min-height 0.2s;
+}
+
+.action-btns {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.action-btns-bottom {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.action-btns-bottom button {
+  flex: 1 1 0;
+  margin: 0 2px;
+}
+
+.action-btns button {
+  min-width: 60px;
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 1em;
+  padding: 0 12px;
+  border: none;
+  background: #eee;
+  cursor: pointer;
+}
+
+.confirm-dialog-bg {
+  position: fixed;
+  z-index: 9999;
+  left: 0; top: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirm-dialog {
+  background: #fff;
+  padding: 24px 20px;
+  border-radius: 12px;
+  min-width: 220px;
+  text-align: center;
+}
+
+.confirm-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.confirm-actions .confirm {
+  background: #d9534f;
+  color: #fff;
+}
+
+.confirm-actions .cancel {
+  background: #eee;
+  color: #333;
+}
+
+@media (max-width: 600px) {
+  .app-root {
+    flex-direction: column;
+    height: auto;
+  }
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    padding: 8px 4px;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    overflow-x: auto;
+    border-bottom: 1px solid #ddd;
+  }
+  .main {
+    width: 100%;
+    padding: 0;
+  }
+  .input-bar textarea {
+    font-size: 1.1em;
+  }
+  .action-btns-bottom {
+    width: 100%;
+    margin-top: 8px;
+    gap: 8px;
+  }
+  .action-btns-bottom button {
+    flex: 1 1 0;
+    margin: 0 2px;
+    min-width: 0;
+    font-size: 1em;
+  }
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
