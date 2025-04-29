@@ -9,13 +9,62 @@ const initialConversations = [
   { id: 1, name: "会话1", messages: [] }
 ];
 
+function getInitialState() {
+  let conversations = initialConversations;
+  let currentId = initialConversations[0].id;
+  try {
+    const saved = localStorage.getItem("grok3_conversations");
+    if (saved) {
+      conversations = JSON.parse(saved);
+      if (!Array.isArray(conversations) || !conversations.length) {
+        conversations = initialConversations;
+      }
+    }
+    const savedId = localStorage.getItem("grok3_current_id");
+    if (savedId && conversations.find(c => c.id === Number(savedId))) {
+      currentId = Number(savedId);
+    } else {
+      currentId = conversations[0].id;
+    }
+  } catch {
+    conversations = initialConversations;
+    currentId = initialConversations[0].id;
+  }
+  return { conversations, currentId };
+}
+
 export default function App() {
   const [selectedModel, setSelectedModel] = useState("grok-3-mini");
-  const [conversations, setConversations] = useState(initialConversations);
-  const [currentId, setCurrentId] = useState(1);
+  const [{ conversations, currentId }, setState] = useState(() => {
+  const state = getInitialState();
+  console.log('[INIT] state from localStorage:', state);
+  return state;
+});
   const [showDelete, setShowDelete] = useState(false);
 
+  // 保证 conversations 和 currentId 同步更新
+  function setConversationsAndCurrentId(newConvs, id) {
+    setState(() => {
+      const conversations = typeof newConvs === 'function' ? newConvs(getInitialState().conversations) : newConvs;
+      const currentId = id !== undefined ? id : (conversations[0] ? conversations[0].id : 1);
+      localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
+      localStorage.setItem("grok3_current_id", String(currentId));
+      console.log('[UPDATE] conversations:', conversations);
+      console.log('[UPDATE] currentId:', currentId);
+      return { conversations, currentId };
+    });
+  }
+  // 兼容原有用法
+  const setConversations = (newConvs) => setConversationsAndCurrentId(newConvs, currentId);
+  const setCurrentId = (id) => setConversationsAndCurrentId(conversations, id);
+
   const currentConv = conversations.find(c => c.id === currentId);
+  console.log('[RENDER] conversations:', conversations);
+  console.log('[RENDER] currentId:', currentId);
+  console.log('[RENDER] localStorage.grok3_conversations:', localStorage.getItem('grok3_conversations'));
+  console.log('[RENDER] localStorage.grok3_current_id:', localStorage.getItem('grok3_current_id'));
+
+
 
   // 新建会话
   const addConversation = () => {
@@ -126,9 +175,31 @@ export default function App() {
 
   // 复制会话
   const copyConversation = () => {
+    if (!currentConv || !currentConv.messages.length) {
+      alert("当前会话没有内容");
+      return;
+    }
     const text = currentConv.messages.map(m => (m.role === "user" ? "Q: " : "A: ") + m.content).join("\n\n");
-    navigator.clipboard.writeText(text);
-    alert("会话内容已复制");
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        alert("会话内容已复制");
+      }, () => {
+        alert("复制失败，请手动复制");
+      });
+    } else {
+      // 兼容旧浏览器
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        alert("会话内容已复制");
+      } catch {
+        alert("复制失败，请手动复制");
+      }
+      document.body.removeChild(textarea);
+    }
   };
 
   return (
