@@ -10,6 +10,7 @@ const initialConversations = [
 ];
 
 export default function App() {
+  const [selectedModel, setSelectedModel] = useState("grok-3-mini");
   const [conversations, setConversations] = useState(initialConversations);
   const [currentId, setCurrentId] = useState(1);
   const [showDelete, setShowDelete] = useState(false);
@@ -33,6 +34,9 @@ export default function App() {
 
   // 发送消息
   const sendMessage = async (text) => {
+    // ...
+    // 使用 selectedModel
+
     if (!text.trim()) return;
     const updated = conversations.map(c =>
       c.id === currentId
@@ -48,7 +52,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: text,
-          model: "grok-3-mini", // 可根据UI选择
+          model: selectedModel, // 可根据UI选择
           history: updated.find(c => c.id === currentId).messages
         })
       });
@@ -116,6 +120,8 @@ export default function App() {
           onSend={sendMessage}
           onCopy={copyConversation}
           onDelete={() => setShowDelete(true)}
+          selectedModel={selectedModel}
+          onModelChange={setSelectedModel}
         />
       </div>
       {showDelete && (
