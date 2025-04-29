@@ -3,9 +3,36 @@ import os
 import hashlib
 from flask import Flask, render_template, request, Response, stream_with_context
 import json
+import sqlite3
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# === SQLite 持久化设置 ===
+DB_PATH = 'chat_history.db'
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER,
+        role TEXT,
+        content TEXT,
+        conversation_id TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_message_to_db(timestamp, role, content, conversation_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''INSERT INTO chat_messages (timestamp, role, content, conversation_id) VALUES (?, ?, ?, ?)''',
+              (timestamp, role, content, conversation_id))
+    conn.commit()
+    conn.close()
 
 # Configure the xAI API client
 api_key = os.getenv("XAI_API_KEY")
@@ -116,14 +143,22 @@ def index():
         question = data.get("question", "").strip()
         selected_model = data.get("model", "grok-3-mini")
         history = data.get("history", [])  # 前端需传递历史消息（[{role, content}]）
+        conversation_id = data.get("conversation_id") or "default"
         if not question:
             return Response("Please enter a question.", mimetype="text/plain"), 400
         # 拼接历史+当前
         history.append({"role": "user", "content": question})
         messages = summarize_history(history, max_chars=2000)
+        # --- 保存用户消息 ---
+        import time
+        save_message_to_db(int(time.time()*1000), 'user', question, conversation_id)
         def stream_gen():
+            assistant_content = ""
             for chunk in get_llm_cached(selected_model, messages, stream=True):
+                assistant_content += chunk
                 yield chunk
+            # --- 保存AI回复 ---
+            save_message_to_db(int(time.time()*1000), 'assistant', assistant_content, conversation_id)
         return Response(stream_with_context(stream_gen()), mimetype='text/plain')
 
     # 普通表单POST（无历史，仅单轮）

@@ -51,11 +51,13 @@
       flex-direction: column;
       min-width: 0;
       font-size: inherit;
+      height: 100%;
+      position: relative;
     }
     .chat {
-      flex: 1;
+      flex: 1 1 auto;
       overflow-y: auto;
-      margin-top: 10px;
+      margin-bottom: 100px;
       white-space: pre-wrap;
       background: #fff;
       padding: 10px;
@@ -63,16 +65,17 @@
       min-width: 0;
       word-break: break-word;
       font-size: inherit;
+      max-height: calc(100vh - 180px);
     }
-    .chat p {
-      margin: 6px 0;
-      font-size: inherit;
-    }
-    .chat p.user {
-      color: #007bff;
-    }
-    .chat p.assistant {
-      color: #333;
+    .form-fixed-bottom {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #f8f8fa;
+      border-top: 1px solid #eee;
+      padding: 10px 0 0 0;
+      z-index: 10;
     }
     .form {
       display: flex;
@@ -80,6 +83,7 @@
       flex-wrap: wrap;
       align-items: stretch;
       font-size: inherit;
+      background: none;
     }
     .form textarea {
       flex: 1 1 100px;
@@ -210,33 +214,35 @@
   </div>
 
   <div class="main">
-    <div class="form">
-      <textarea x-model="question" placeholder="输入你的问题…"></textarea>
-      <div class="model-group">
-        <select x-model="model" class="model-select">
-          <option value="grok-3">Grok 3</option>
-          <option value="grok-3-mini">Grok 3 Mini</option>
-        </select>
-        <button class="send-btn" @click="send()">发送</button>
-      </div>
-      <select class="font-size-select" x-model="fontSize">
-        <option value="18">小</option>
-        <option value="20">标准</option>
-        <option value="22">大</option>
-        <option value="24">特大</option>
-        <option value="28">超大</option>
-        <option value="32">极大</option>
-        <option value="36">最大</option>
-      </select>
-    </div>
-    <div class="action-btns">
-      <button @click="copyConversation()" type="button" title="复制会话">📋</button>
-      <button @click="deleteConversation()" type="button" title="删除会话">🗑️</button>
-    </div>
     <div class="chat">
       <template x-for="msg in getCurrentConversation().messages" :key="msg.timestamp">
         <p :class="msg.role" x-text="(msg.role==='user'? 'Q: ':'A: ') + msg.content"></p>
       </template>
+    </div>
+    <div class="form-fixed-bottom">
+      <div class="form">
+        <textarea x-model="question" placeholder="输入你的问题…"></textarea>
+        <div class="model-group">
+          <select x-model="model" class="model-select">
+            <option value="grok-3">Grok 3</option>
+            <option value="grok-3-mini">Grok 3 Mini</option>
+          </select>
+          <button class="send-btn" @click="send()">发送</button>
+        </div>
+        <select class="font-size-select" x-model="fontSize">
+          <option value="18">小</option>
+          <option value="20">标准</option>
+          <option value="22">大</option>
+          <option value="24">特大</option>
+          <option value="28">超大</option>
+          <option value="32">极大</option>
+          <option value="36">最大</option>
+        </select>
+        <div class="action-btns">
+          <button @click="copyConversation()" type="button" title="复制会话">📋</button>
+          <button @click="showDeleteConfirm = true" type="button" title="删除会话">🗑️</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -248,6 +254,7 @@
         question: '',
         model: 'grok-3-mini',
         fontSize: localStorage.getItem('fontSize') || '22',
+        showDeleteConfirm: false,
 
         init() {
           this.conversations = JSON.parse(localStorage.getItem('chats')||'[]');
@@ -340,6 +347,7 @@
             }
             this.save();
           }
+          this.showDeleteConfirm = false;
         }
       }
     }
@@ -350,5 +358,14 @@
   </script>
 <!-- 字体大小变动时自动保存 -->
 <div x-effect="localStorage.setItem('fontSize', fontSize)"></div>
+
+<!-- 自定义删除确认弹窗 -->
+<div x-show="showDeleteConfirm" style="position:fixed;z-index:9999;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;" x-transition>
+  <div style="background:#fff;padding:24px 20px;border-radius:12px;box-shadow:0 2px 16px #0003;min-width:220px;text-align:center;">
+    <div style="margin-bottom:18px;font-size:1.1em;">确定要删除当前会话吗？</div>
+    <button @click="deleteConversation()" style="margin:0 10px 0 0;padding:8px 18px;background:#d9534f;color:#fff;border:none;border-radius:6px;font-size:inherit;">确定</button>
+    <button @click="showDeleteConfirm = false" style="padding:8px 18px;background:#eee;color:#333;border:none;border-radius:6px;font-size:inherit;">取消</button>
+  </div>
+</div>
 </body>
 </html>
