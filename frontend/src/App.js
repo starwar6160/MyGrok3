@@ -92,6 +92,7 @@ export default function App() {
 
   // 新建会话
   const addConversation = () => {
+    setSelectedModel("grok-3-mini"); // Reset model to default for new conversation
     const newId = Date.now();
     setConversationsAndCurrentId(
       [...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }],
