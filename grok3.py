@@ -108,14 +108,17 @@ r = redis.Redis(host='localhost', port=6379, db=0)
 
 # Added function to save messages to Redis
 def save_message_to_redis(timestamp, role, content, conversation_id):
-    message = {"timestamp": timestamp, "role": role, "content": content}
-    existing_data = r.get(conversation_id)
-    if existing_data:
-        messages = json.loads(existing_data)
-    else:
-        messages = []
-    messages.append(message)
-    r.set(conversation_id, json.dumps(messages))
+    try:
+        message = {"timestamp": timestamp, "role": role, "content": content}
+        existing_data = r.get(conversation_id)
+        if existing_data:
+            messages = json.loads(existing_data)
+        else:
+            messages = []
+        messages.append(message)
+        r.set(conversation_id, json.dumps(messages))
+    except redis.ConnectionError as e:
+        print(f"Redis Connection Error: {e}")
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
