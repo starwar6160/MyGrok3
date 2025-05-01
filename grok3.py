@@ -2,10 +2,7 @@ import openai
 import os
 import hashlib
 import json
-import sqlite3
-import openai
-import os
-import hashlib
+import redis
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
 
@@ -18,42 +15,6 @@ try:
     CORS(app)
 except ImportError:
     pass  # 如果没装CORS，先不报错
-
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_react(path):
-    build_dir = Path(app.static_folder)
-    file_path = build_dir / path
-    if path != "" and file_path.exists():
-        return send_from_directory(build_dir, path)
-    else:
-        return send_from_directory(build_dir, "index.html")
-
-# === SQLite 持久化设置 ===
-DB_PATH = 'chat_history.db'
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp INTEGER,
-        role TEXT,
-        content TEXT,
-        conversation_id TEXT
-    )''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def save_message_to_db(timestamp, role, content, conversation_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''INSERT INTO chat_messages (timestamp, role, content, conversation_id) VALUES (?, ?, ?, ?)''',
-              (timestamp, role, content, conversation_id))
-    conn.commit()
-    conn.close()
 
 # Configure the xAI API client
 api_key = os.getenv("XAI_API_KEY")
@@ -142,6 +103,30 @@ def ask_grok(model, messages):
         print(f"[ask_grok] Exception: {e}")
         return f"Unexpected Error: {e}"
 
+# Added Redis client setup
+r = redis.Redis(host='localhost', port=6379, db=0)
+
+# Added function to save messages to Redis
+def save_message_to_redis(timestamp, role, content, conversation_id):
+    message = {"timestamp": timestamp, "role": role, "content": content}
+    existing_data = r.get(conversation_id)
+    if existing_data:
+        messages = json.loads(existing_data)
+    else:
+        messages = []
+    messages.append(message)
+    r.set(conversation_id, json.dumps(messages))
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    build_dir = Path(app.static_folder)
+    file_path = build_dir / path
+    if path != "" and file_path.exists():
+        return send_from_directory(build_dir, path)
+    else:
+        return send_from_directory(build_dir, "index.html")
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     answer = None
@@ -163,14 +148,14 @@ def index():
         messages = summarize_history(history, max_chars=2000)
         # --- 保存用户消息 ---
         import time
-        save_message_to_db(int(time.time()*1000), 'user', question, conversation_id)
+        save_message_to_redis(int(time.time()*1000), 'user', question, conversation_id)
         def stream_gen():
             assistant_content = ""
             for chunk in get_llm_cached(selected_model, messages, stream=True):
                 assistant_content += chunk
                 yield chunk
             # --- 保存AI回复 ---
-            save_message_to_db(int(time.time()*1000), 'assistant', assistant_content, conversation_id)
+            save_message_to_redis(int(time.time()*1000), 'assistant', assistant_content, conversation_id)
         return Response(stream_with_context(stream_gen()), mimetype='text/plain')
 
     # 普通表单POST（无历史，仅单轮）
@@ -221,7 +206,7 @@ def api_chat():
     messages = summarize_history(history, max_chars=2000)
     # 保存用户消息
     import time
-    save_message_to_db(int(time.time()*1000), 'user', question, conversation_id)
+    save_message_to_redis(int(time.time()*1000), 'user', question, conversation_id)
     print(f"[api_chat] question={question!r}")
     print(f"[api_chat] model={selected_model!r}")
     print(f"[api_chat] history={history!r}")
@@ -234,7 +219,7 @@ def api_chat():
             full_answer += chunk
             yield chunk
         # 保存AI回复（只保存一次完整内容）
-        save_message_to_db(int(time.time()*1000), 'assistant', full_answer, conversation_id)
+        save_message_to_redis(int(time.time()*1000), 'assistant', full_answer, conversation_id)
     return Response(generate(), mimetype='text/plain')
 
 import socket
