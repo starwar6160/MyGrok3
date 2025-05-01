@@ -38,13 +38,17 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
       />
       <div className="input-bar-bottom">
         <div className="action-btns action-btns-bottom">
-          <button onClick={handleSend} title="发送">发送</button>
-          <button onClick={onCopy} title="复制会话">复制</button>
-          <button onClick={onDelete} title="删除会话">删除</button>
-          <select value={selectedModel} onChange={e => onModelChange(e.target.value)} style={{ marginLeft: 12 }}>
-            <option value="grok-3-mini">grok-3-mini</option>
-            <option value="grok-3">grok-3</option>
-          </select>
+          <div className="left-buttons">
+            <button onClick={onDelete} title="删除会话">删除</button>
+          </div>
+          <div className="right-buttons">
+            <select value={selectedModel} onChange={e => onModelChange(e.target.value)} style={{ marginLeft: 12 }}>
+              <option value="grok-3-mini">grok-3-mini</option>
+              <option value="grok-3">grok-3</option>
+            </select>
+            <button onClick={onCopy} title="复制会话">复制</button>
+            <button onClick={handleSend} title="发送">发送</button>
+          </div>
         </div>
       </div>
     </div>

@@ -116,11 +116,11 @@ html, body, #root, .app-root {
 
 .action-btns-bottom {
   width: 100%;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .action-btns-bottom button {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   margin: 0 2px;
 }
 
@@ -133,6 +133,15 @@ html, body, #root, .app-root {
   border: none;
   background: #eee;
   cursor: pointer;
+}
+
+.left-buttons {
+  margin-right: auto;
+}
+
+.right-buttons {
+  display: flex;
+  gap: 8px;
 }
 
 .confirm-dialog-bg {
@@ -173,7 +182,7 @@ html, body, #root, .app-root {
 
 @media (max-width: 600px) {
   .app-root {
-    flex-direction: column;
+    flex-direction: column-reverse;
     height: auto;
   }
   .sidebar {
@@ -199,7 +208,7 @@ html, body, #root, .app-root {
     gap: 8px;
   }
   .action-btns-bottom button {
-    flex: 1 1 0;
+    flex: 0 1 auto;
     margin: 0 2px;
     min-width: 0;
     font-size: 1em;
