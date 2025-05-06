@@ -164,18 +164,20 @@ export default function App() {
         if (done) break;
         result += decoder.decode(value);
         // 实时更新最后一条 assistant 消息内容
-        setConversations(convs => { // eslint-disable-next-line no-loop-func
-          if (convs.id !== currentId) return convs;
-          const msgs = [...convs.messages];
-          // 找到最后一条 assistant 消息并更新
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === "assistant") {
-              msgs[i] = { ...msgs[i], content: result };
-              break;
+        setConversations(convs =>
+          convs.map(c => {
+            if (c.id !== currentId) return c;
+            const msgs = [...c.messages];
+            // 找到最后一条 assistant 消息并更新
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "assistant") {
+                msgs[i] = { ...msgs[i], content: result };
+                break;
+              }
             }
-          }
-          return { ...convs, messages: msgs };
-        });
+            return { ...c, messages: msgs };
+          })
+        );
       }
       // assistant 回复结束后自动归纳标题
       const conv = conversations.find(c => c.id === currentId);
