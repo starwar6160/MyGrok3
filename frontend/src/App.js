@@ -34,6 +34,10 @@ function getInitialState() {
 }
 
 export default function App() {
+  // 新增状态
+  const [lastFailedQuestion, setLastFailedQuestion] = useState("");
+  const [showRetry, setShowRetry] = useState(false);
+
   const [selectedModel, setSelectedModel] = useState("grok-3-mini");
   const [{ conversations, currentId }, setState] = useState(() => {
   const state = getInitialState();
@@ -128,6 +132,8 @@ export default function App() {
   }
 
   const sendMessage = async (text) => {
+    setShowRetry(false);
+    setLastFailedQuestion("");
     if (!text.trim()) return;
     const updated = conversations.map(c =>
       c.id === currentId
@@ -198,8 +204,18 @@ export default function App() {
             : c
         )
       );
+      setLastFailedQuestion(text);
+      setShowRetry(true);
     }
   };
+
+  // 重试上次提问
+  const handleRetry = () => {
+    if (lastFailedQuestion) {
+      sendMessage(lastFailedQuestion);
+    }
+  };
+
 
   // 复制会话
   const copyConversation = () => {
@@ -239,13 +255,19 @@ export default function App() {
         addConversation={addConversation}
       />
       <div className="main">
+        {/* 删除按钮置顶，仅在有会话时显示 */}
+        <div style={{display:'flex',justifyContent:'flex-end',alignItems:'center',padding:'8px 0'}}>
+          {conversations.length > 0 && (
+            <button onClick={() => setShowDelete(true)} style={{background:'#f8f8fa',border:'1px solid #eee',borderRadius:8,padding:'6px 18px',fontSize:'1em',color:'#d9534f',marginRight:12}}>删除会话</button>
+          )}
+        </div>
         <ChatWindow messages={currentConv ? currentConv.messages : []} />
         <InputBar
           onSend={sendMessage}
           onCopy={copyConversation}
-          onDelete={() => setShowDelete(true)}
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
+          onRetry={showRetry ? handleRetry : undefined}
         />
       </div>
       {showDelete && (

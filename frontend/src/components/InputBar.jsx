@@ -38,17 +38,19 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
           }}
           placeholder="输入你的问题..."
         />
-        <button
-          onClick={onRetry}
-          title="刷新/重试"
-          style={{marginLeft:8,padding:'0 16px',fontSize:'1.1em',background:'#f0f0f0',border:'1px solid #ccc',borderRadius:6,cursor:'pointer',display:'flex',alignItems:'center'}}>
-          🔄
-        </button>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            title="刷新/重试"
+            style={{marginLeft:8,padding:'0 16px',fontSize:'1.1em',background:'#f0f0f0',border:'1px solid #ccc',borderRadius:6,cursor:'pointer',display:'flex',alignItems:'center'}}>
+            🔄
+          </button>
+        )}
       </div>
       <div className="input-bar-bottom">
         <div className="action-btns action-btns-bottom">
           <div className="left-buttons">
-            <button onClick={onDelete} title="删除会话">删除</button>
+            {/* 删除按钮已移至顶部 */}
           </div>
           <div className="right-buttons">
             <select value={selectedModel} onChange={e => onModelChange(e.target.value)} style={{ marginLeft: 12 }}>

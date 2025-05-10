@@ -70,7 +70,7 @@ export default function ReplyBox({ content }) {
 
 
   return (
-    <div className="pre-code-box" style={{display: 'block'}}>
+    <div className="pre-code-box" style={{display: 'block', position: 'relative', paddingBottom: '38px'}}>
       <span className="ai-label">A:</span>
       <div className="ai-content" style={{padding: 0}}>
         {parts.map((part, i) => {
@@ -91,7 +91,11 @@ export default function ReplyBox({ content }) {
           }
         })}
       </div>
-      <button className="copy-btn" onClick={handleCopy} title="复制全部" style={{position:'absolute',top:10,right:10}}>📋</button>
+      {/* box底部单独复制按钮 */}
+      <div style={{width:'100%', display:'flex', justifyContent:'flex-end', position:'absolute', left:0, bottom:6, padding:'0 10px'}}>
+        <button className="copy-btn" onClick={handleCopy} title="复制本次AI回复" style={{background:'#e0e0e0', color:'#007bff', border:'none', borderRadius:4, padding:'4px 16px', fontSize:'1em', cursor:'pointer'}}>📋 复制本回复</button>
+      </div>
+
     </div>
   );
 }
