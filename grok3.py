@@ -2,7 +2,6 @@ import openai
 import os
 import hashlib
 import json
-import redis
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
 
@@ -103,22 +102,8 @@ def ask_grok(model, messages):
         print(f"[ask_grok] Exception: {e}")
         return f"Unexpected Error: {e}"
 
-# Added Redis client setup
-r = redis.Redis(host='localhost', port=6379, db=0)
 
-# Added function to save messages to Redis
-def save_message_to_redis(timestamp, role, content, conversation_id):
-    try:
-        message = {"timestamp": timestamp, "role": role, "content": content}
-        existing_data = r.get(conversation_id)
-        if existing_data:
-            messages = json.loads(existing_data)
-        else:
-            messages = []
-        messages.append(message)
-        r.set(conversation_id, json.dumps(messages))
-    except redis.ConnectionError as e:
-        print(f"Redis Connection Error: {e}")
+
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -151,14 +136,14 @@ def index():
         messages = summarize_history(history, max_chars=2000)
         # --- 保存用户消息 ---
         import time
-        save_message_to_redis(int(time.time()*1000), 'user', question, conversation_id)
+        
         def stream_gen():
             assistant_content = ""
             for chunk in get_llm_cached(selected_model, messages, stream=True):
                 assistant_content += chunk
                 yield chunk
             # --- 保存AI回复 ---
-            save_message_to_redis(int(time.time()*1000), 'assistant', assistant_content, conversation_id)
+            
         return Response(stream_with_context(stream_gen()), mimetype='text/plain')
 
     # 普通表单POST（无历史，仅单轮）
@@ -209,7 +194,7 @@ def api_chat():
     messages = summarize_history(history, max_chars=2000)
     # 保存用户消息
     import time
-    save_message_to_redis(int(time.time()*1000), 'user', question, conversation_id)
+    
     print(f"[api_chat] question={question!r}")
     print(f"[api_chat] model={selected_model!r}")
     print(f"[api_chat] history={history!r}")
@@ -222,7 +207,7 @@ def api_chat():
             full_answer += chunk
             yield chunk
         # 保存AI回复（只保存一次完整内容）
-        save_message_to_redis(int(time.time()*1000), 'assistant', full_answer, conversation_id)
+        
     return Response(generate(), mimetype='text/plain')
 
 import socket
@@ -236,10 +221,3 @@ def find_free_port(start_port=5000, max_tries=10):
             port += 1
     raise RuntimeError("No free port found in range.")
 
-if __name__ == "__main__":
-    try:
-        port = find_free_port(5000, 11)
-        print(f" * Flask running on port {port}")
-        app.run(debug=True, host="0.0.0.0", port=port)
-    except Exception as e:
-        print(f"启动失败: {e}")

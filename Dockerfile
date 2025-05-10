@@ -19,4 +19,4 @@ ENV FLASK_APP=grok3.py
 ENV FLASK_RUN_HOST=0.0.0.0
 
 # Runtime entrypoint
-CMD ["python", "grok3.py"]
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "grok3:app"]
