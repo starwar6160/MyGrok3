@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange }) {
+export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange, onRefresh }) {
   const [text, setText] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef();
@@ -48,6 +48,7 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
             </select>
             <button onClick={onCopy} title="复制会话">复制</button>
             <button onClick={handleSend} title="发送">发送</button>
+            <button onClick={onRefresh ? onRefresh : handleSend} title="刷新" style={{marginLeft:8}}>刷新</button>
           </div>
         </div>
       </div>

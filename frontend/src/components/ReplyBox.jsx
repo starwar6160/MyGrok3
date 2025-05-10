@@ -53,9 +53,21 @@ export default function ReplyBox({ content }) {
   // 复制代码块
   const handleCopyCode = code => {
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(code);
+      navigator.clipboard.writeText(code).then(() => {
+        // 简单反馈
+        alert('代码已复制');
+      });
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = code;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      alert('代码已复制');
     }
   };
+
 
   return (
     <div className="pre-code-box" style={{display: 'block'}}>
