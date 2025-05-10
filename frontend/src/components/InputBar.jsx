@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange, onRefresh }) {
+export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange, onRetry }) {
   const [text, setText] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef();
@@ -22,20 +22,29 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
 
   return (
     <div className="input-bar">
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={e => setText(e.target.value)}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        rows={isFocused ? 8 : 2}
-        style={{
-          minHeight: isFocused ? "40vh" : "2.5em",
-          maxHeight: "50vh",
-          transition: "min-height 0.2s"
-        }}
-        placeholder="输入你的问题..."
-      />
+      <div style={{display:'flex',alignItems:'stretch'}}>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          rows={isFocused ? 8 : 2}
+          style={{
+            minHeight: isFocused ? "40vh" : "2.5em",
+            maxHeight: "50vh",
+            transition: "min-height 0.2s",
+            flex:1
+          }}
+          placeholder="输入你的问题..."
+        />
+        <button
+          onClick={onRetry}
+          title="刷新/重试"
+          style={{marginLeft:8,padding:'0 16px',fontSize:'1.1em',background:'#f0f0f0',border:'1px solid #ccc',borderRadius:6,cursor:'pointer',display:'flex',alignItems:'center'}}>
+          🔄
+        </button>
+      </div>
       <div className="input-bar-bottom">
         <div className="action-btns action-btns-bottom">
           <div className="left-buttons">
@@ -48,7 +57,6 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
             </select>
             <button onClick={onCopy} title="复制会话">复制</button>
             <button onClick={handleSend} title="发送">发送</button>
-            <button onClick={onRefresh ? onRefresh : handleSend} title="刷新" style={{marginLeft:8}}>刷新</button>
           </div>
         </div>
       </div>
