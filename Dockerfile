@@ -4,6 +4,9 @@ FROM python:3.13-slim
 # Set working directory
 WORKDIR /app
 
+# Create a directory for persistent data
+RUN mkdir -p /data
+
 # Install dependencies
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt

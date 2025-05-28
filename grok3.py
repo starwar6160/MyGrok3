@@ -4,6 +4,9 @@ import hashlib
 import json
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
+import sqlite3
+from datetime import datetime, timedelta
+import uuid
 
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="frontend/build")
@@ -102,8 +105,74 @@ def ask_grok(model, messages):
         print(f"[ask_grok] Exception: {e}")
         return f"Unexpected Error: {e}"
 
+# Database configuration
+import os
 
+def ensure_db_dir_exists(db_path):
+    dir_name = os.path.dirname(db_path)
+    if dir_name and not os.path.exists(dir_name):
+        os.makedirs(dir_name, exist_ok=True)
 
+DATABASE = os.getenv('SQLITE_DATABASE')
+if not DATABASE:
+    # Default: local file for dev, or /data/chat_topics.db for Docker if /data exists
+    if os.path.isdir('/data'):
+        DATABASE = '/data/chat_topics.db'
+    else:
+        DATABASE = 'chat_topics.db'
+
+ensure_db_dir_exists(DATABASE)
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+            )
+        ''')
+        conn.commit()
+
+# Initialize the database on app startup
+with app.app_context():
+    init_db()
+
+def save_conversation(conversation_id, title):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO conversations (id, title) VALUES (?, ?)", (conversation_id, title))
+        conn.commit()
+
+def update_conversation_timestamp(conversation_id):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE conversations SET last_active = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,))
+        conn.commit()
+
+def save_message(conversation_id, role, content):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
+                       (conversation_id, role, content))
+        conn.commit()
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -169,6 +238,7 @@ def api_title_summary():
     data = request.get_json()
     print('[FLASK] /api/title_summary received:', data)
     messages = data.get("messages", [])
+    conversation_id = data.get("conversation_id")
     prompt = (
         "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
         + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
@@ -177,7 +247,67 @@ def api_title_summary():
     # 只取前10字，去除空白
     title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
     print('[FLASK] /api/title_summary response:', title)
+    if conversation_id:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id))
+            conn.commit()
     return jsonify({"title": title or "新会话"})
+
+def get_conversations(active_hours=None, hidden_hours=None):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        query = "SELECT id, title, created_at, last_active FROM conversations"
+        conditions = []
+        params = []
+
+        if active_hours is not None:
+            active_time_threshold = datetime.now() - timedelta(hours=active_hours)
+            conditions.append("last_active >= ?")
+            params.append(active_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
+
+        if hidden_hours is not None:
+            hidden_time_threshold = datetime.now() - timedelta(hours=hidden_hours)
+            conditions.append("last_active < ?")
+            params.append(hidden_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY last_active DESC"
+        
+        cursor.execute(query, params)
+        conversations = []
+        for row in cursor.fetchall():
+            conv = dict(row)
+            conv['messages'] = get_messages_for_conversation(conv['id'])
+            conversations.append(conv)
+        return conversations
+
+def get_messages_for_conversation(conversation_id):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (conversation_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+@app.route("/api/conversations", methods=["GET"])
+def api_conversations():
+    # For conversations with new Q&A in the last 12 hours, always auto-load
+    active_conversations = get_conversations(active_hours=12)
+    # For conversations without new Q&A in the last 24 hours, hide from web
+    hidden_conversations = get_conversations(hidden_hours=24)
+
+    # Combine and remove duplicates (a conversation might be in both if it's older than 12 but newer than 24)
+    # The requirement says "hidden from web" for >24h, so we filter those out.
+    # And "always auto-load" for <12h. So we return only those <24h.
+    all_conversations = get_conversations(hidden_hours=None) # Get all to filter in Python
+    filtered_conversations = []
+    hidden_ids = {conv['id'] for conv in hidden_conversations}
+
+    for conv in all_conversations:
+        if conv['id'] not in hidden_ids:
+            filtered_conversations.append(conv)
+
+    return jsonify(filtered_conversations)
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -186,28 +316,38 @@ def api_chat():
     question = data.get("question", "").strip()
     selected_model = data.get("model", "grok-3-mini")
     history = data.get("history", [])
-    conversation_id = data.get("conversation_id") or "default"
+    conversation_id = data.get("conversation_id")
+
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        # If it's a new conversation, save it with a default title for now
+        # The title will be updated later by /api/title_summary
+        save_conversation(conversation_id, "New Chat")
+
     if not question:
         return jsonify({"error": "Please enter a question."}), 400
-    # 拼接历史+当前
+
+    # Save user message
+    save_message(conversation_id, "user", question)
+
+    # Append user message to history for LLM processing
     history.append({"role": "user", "content": question})
     messages = summarize_history(history, max_chars=2000)
-    # 保存用户消息
-    import time
-    
+
     print(f"[api_chat] question={question!r}")
     print(f"[api_chat] model={selected_model!r}")
     print(f"[api_chat] history={history!r}")
+
     def generate():
-        import types
         answer_chunks = get_llm_cached(selected_model, messages, stream=True)
-        import sys
         full_answer = ''
         for chunk in answer_chunks:
             full_answer += chunk
             yield chunk
-        # 保存AI回复（只保存一次完整内容）
-        
+        # Save AI response
+        save_message(conversation_id, "assistant", full_answer)
+        update_conversation_timestamp(conversation_id)
+
     return Response(generate(), mimetype='text/plain')
 
 import socket
@@ -220,4 +360,3 @@ def find_free_port(start_port=5000, max_tries=10):
                 return port
             port += 1
     raise RuntimeError("No free port found in range.")
-

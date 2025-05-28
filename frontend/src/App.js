@@ -1,36 +1,71 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
 import InputBar from "./components/InputBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import "./index.css";
+import { v4 as uuidv4 } from 'uuid';
 
 const initialConversations = [
-  { id: 1, name: "会话1", messages: [] }
+  { id: 1, name: "会话1", messages: [] } // This might become obsolete or a placeholder
 ];
 
-function getInitialState() {
-  let conversations = initialConversations;
+async function getInitialState() {
+  let localConversations = initialConversations;
   let currentId = initialConversations[0].id;
+
   try {
     const saved = localStorage.getItem("grok3_conversations");
     if (saved) {
-      conversations = JSON.parse(saved);
-      if (!Array.isArray(conversations) || !conversations.length) {
-        conversations = initialConversations;
+      localConversations = JSON.parse(saved);
+      if (!Array.isArray(localConversations) || !localConversations.length) {
+        localConversations = initialConversations;
       }
     }
     const savedId = localStorage.getItem("grok3_current_id");
-    if (savedId && conversations.find(c => c.id === Number(savedId))) {
-      currentId = Number(savedId);
+    if (savedId && localConversations.find(c => c.id === savedId)) {
+      currentId = savedId;
     } else {
-      currentId = conversations[0].id;
+      currentId = localConversations[0].id;
     }
-  } catch {
-    conversations = initialConversations;
+  } catch (e) {
+    console.error("Error loading from localStorage:", e);
+    localConversations = initialConversations;
     currentId = initialConversations[0].id;
   }
-  return { conversations, currentId };
+
+  // Fetch from backend
+  try {
+    const response = await fetch('/api/conversations');
+    if (response.ok) {
+      const backendConversations = await response.json();
+      console.log("Backend conversations:", backendConversations);
+
+      // Merge backend and local conversations
+      // Prioritize backend data, and add any local-only conversations
+      const mergedConversationsMap = new Map();
+      backendConversations.forEach(conv => mergedConversationsMap.set(conv.id, conv));
+      localConversations.forEach(conv => {
+        if (!mergedConversationsMap.has(conv.id)) {
+          mergedConversationsMap.set(conv.id, conv);
+        }
+      });
+      const mergedConversations = Array.from(mergedConversationsMap.values());
+
+      if (mergedConversations.length > 0) {
+        // If currentId from local storage is not in merged, default to first backend conv
+        if (!mergedConversations.find(c => c.id === currentId)) {
+          currentId = mergedConversations[0].id;
+        }
+        return { conversations: mergedConversations, currentId };
+      }
+    }
+  } catch (e) {
+    console.error("Error fetching conversations from backend:", e);
+    // Fallback to local storage if backend fetch fails
+  }
+
+  return { conversations: localConversations, currentId };
 }
 
 export default function App() {
@@ -39,17 +74,28 @@ export default function App() {
   const [showRetry, setShowRetry] = useState(false);
 
   const [selectedModel, setSelectedModel] = useState("grok-3-mini");
-  const [{ conversations, currentId }, setState] = useState(() => {
-  const state = getInitialState();
-  console.log('[INIT] state from localStorage:', state);
-  return state;
-});
+  const [{ conversations, currentId }, setState] = useState({
+    conversations: initialConversations,
+    currentId: initialConversations[0].id,
+  });
+
+  useEffect(() => {
+    const loadConversations = async () => {
+      const state = await getInitialState();
+      console.log('[INIT] state from localStorage/backend:', state);
+      setState(state);
+      localStorage.setItem("grok3_conversations", JSON.stringify(state.conversations));
+      localStorage.setItem("grok3_current_id", String(state.currentId));
+    };
+    loadConversations();
+  }, []);
+
   const [showDelete, setShowDelete] = useState(false);
 
   // 保证 conversations 和 currentId 同步更新
   function setConversationsAndCurrentId(newConvs, id) {
-    setState(() => {
-      const conversations = typeof newConvs === 'function' ? newConvs(getInitialState().conversations) : newConvs;
+    setState(prevState => {
+      const conversations = typeof newConvs === 'function' ? newConvs(prevState.conversations) : newConvs;
       const currentId = id !== undefined ? id : (conversations[0] ? conversations[0].id : 1);
       localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
       localStorage.setItem("grok3_current_id", String(currentId));
@@ -59,17 +105,18 @@ export default function App() {
     });
   }
   // 兼容原有用法
-  const setConversations = (newConvs) => setState(state => {
-    localStorage.setItem("grok3_conversations", JSON.stringify(typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs));
+  const setConversations = (newConvs) => setState(prevState => {
+    const conversations = typeof newConvs === 'function' ? newConvs(prevState.conversations) : newConvs;
+    localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
     return {
-      conversations: typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs,
-      currentId: state.currentId
+      conversations: conversations,
+      currentId: prevState.currentId
     };
   });
-  const setCurrentId = (id) => setState(state => {
+  const setCurrentId = (id) => setState(prevState => {
     localStorage.setItem("grok3_current_id", String(id));
     return {
-      conversations: state.conversations,
+      conversations: prevState.conversations,
       currentId: id
     };
   });
@@ -77,7 +124,7 @@ export default function App() {
   const currentConv = conversations.find(c => c.id === currentId);
 
   // 用 useEffect 监控 currentId/conversations，自动修正无效 currentId
-  React.useEffect(() => {
+  useEffect(() => {
     if (!conversations.find(c => c.id === currentId) && conversations.length > 0) {
       const fallbackId = conversations[0].id;
       setState(state => {
@@ -97,9 +144,9 @@ export default function App() {
   // 新建会话
   const addConversation = () => {
     setSelectedModel("grok-3-mini"); // Reset model to default for new conversation
-    const newId = Date.now();
+    const newId = uuidv4(); // Use UUID for new conversation ID
     setConversationsAndCurrentId(
-      [...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }],
+      [...conversations, { id: newId, name: `新会话`, messages: [] }], // Default name to '新会话'
       newId
     );
   };
@@ -108,50 +155,65 @@ export default function App() {
   // 删除会话
   const deleteConversation = () => {
     const newList = conversations.filter(c => c.id !== currentId);
-    setConversations(newList.length ? newList : [{ id: 1, name: "会话1", messages: [] }]);
-    setCurrentId(newList.length ? newList[0].id : 1);
+    // TODO: Also delete from backend
+    if (newList.length > 0) {
+      setConversationsAndCurrentId(newList, newList[0].id);
+    } else {
+      // If no conversations left, create a new one
+      addConversation();
+    }
     setShowDelete(false);
   };
 
-  // 发送消息
   // 用 grok-3-mini 自动归纳标题
-  async function summarizeTitleAI(messages) {
+  const summarizeTitleAI = async (messages) => {
     try {
       const response = await fetch("/api/title_summary", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: messages.slice(0, 10) // 只取前10条，避免太长
-        })
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ messages, conversation_id: currentId }), // Pass conversation_id
       });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const data = await response.json();
-      return data.title || "新会话";
-    } catch {
+      return data.title;
+    } catch (error) {
+      console.error("Error summarizing title:", error);
       return "新会话";
     }
-  }
+  };
 
+  // 发送消息
   const sendMessage = async (text) => {
-    setShowRetry(false);
-    setLastFailedQuestion("");
     if (!text.trim()) return;
-    const updated = conversations.map(c =>
-      c.id === currentId
-        ? { ...c, messages: [...c.messages, { role: "user", content: text }] }
-        : c
-    );
-    setConversations(updated);
+    const conv = conversations.find(c => c.id === currentId);
+    if (!conv) return;
 
-    // 调用后端API获取AI回复
+    const userMessage = { role: "user", content: text };
+    // 立即更新 UI
+    setConversations(convs =>
+      convs.map(c =>
+        c.id === currentId
+          ? { ...c, messages: [...c.messages, userMessage] }
+          : c
+      )
+    );
+
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           question: text,
-          model: selectedModel, // 可根据UI选择
-          history: updated.find(c => c.id === currentId).messages
-        })
+          model: selectedModel,
+          history: conv.messages, // 传递当前会话的历史消息
+          conversation_id: currentId, // Pass conversation_id
+        }),
       });
       // 流式读取
       const reader = response.body.getReader();
@@ -186,10 +248,11 @@ export default function App() {
         );
       }
       // assistant 回复结束后自动归纳标题
-      const conv = conversations.find(c => c.id === currentId);
-      if (conv) {
-        const msgs = [...conv.messages, { role: "assistant", content: result }];
-        const title = await summarizeTitleAI(msgs);
+      const updatedConv = conversations.find(c => c.id === currentId);
+      if (updatedConv) {
+        // Use the messages from the state after the assistant's message has been added
+        const msgsForTitleSummary = [...updatedConv.messages, { role: "assistant", content: result }];
+        const title = await summarizeTitleAI(msgsForTitleSummary);
         setConversations(convs =>
           convs.map(c =>
             c.id === currentId ? { ...c, name: title } : c
@@ -197,6 +260,7 @@ export default function App() {
         );
       }
     } catch (err) {
+      console.error("Error sending message:", err);
       setConversations(convs =>
         convs.map(c =>
           c.id === currentId

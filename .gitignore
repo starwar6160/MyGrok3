@@ -2,3 +2,4 @@ nohup.out
 __pycache__/*.pyc
 chat_history.db
 
+chat_topics.db
