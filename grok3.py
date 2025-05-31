@@ -114,6 +114,8 @@ redis_client = redis.Redis(host='localhost', port=6379, db=0)
 # Redis keys for conversations and messages
 CONVERSATIONS_KEY = "conversations"
 CONVERSATIONS_TITLE_KEY = "conversation_titles"
+# Expiration time in seconds (7 days)
+REDIS_EXPIRE_SECONDS = 7 * 24 * 60 * 60  # 7 days in seconds
 
 # LLM 缓存函数
 def get_llm_cache(prompt_hash):
@@ -199,21 +201,30 @@ def create_conversation():
     created_at = datetime.now().isoformat()
 
     # Store conversation metadata in a hash
-    redis_client.hset(f"conversation:{conversation_id}", mapping={
+    conversation_key = f"conversation:{conversation_id}"
+    messages_key = f"messages:{conversation_id}"
+    
+    # Set conversation data with expiration
+    redis_client.hset(conversation_key, mapping={
         'id': conversation_id,
         'title': title,
         'created_at': created_at
     })
+    # Set expiration for conversation data (7 days)
+    redis_client.expire(conversation_key, REDIS_EXPIRE_SECONDS)
     
     # Add conversation ID to a list for ordering
     # First check if it's already in the list to avoid duplicates
     if not redis_client.lpos(CONVERSATIONS_KEY, conversation_id):
         redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
+    # Set expiration for the conversations list (7 days from now)
+    redis_client.expire(CONVERSATIONS_KEY, REDIS_EXPIRE_SECONDS)
     
     # Create an empty messages list if it doesn't exist
-    messages_key = f"messages:{conversation_id}"
     if not redis_client.exists(messages_key):
         redis_client.rpush(messages_key, '')  # Add empty message to create the list
+    # Set expiration for messages (7 days from now)
+    redis_client.expire(messages_key, REDIS_EXPIRE_SECONDS)
     
     return jsonify({
         'id': conversation_id, 
@@ -280,7 +291,7 @@ def add_message():
     content = data.get('content')
     message_id = str(uuid.uuid4())
     timestamp = datetime.now().isoformat()
-
+    messages_key = f"messages:{conversation_id}"
     message_data = {
         'id': message_id,
         'conversation_id': conversation_id,
@@ -289,7 +300,9 @@ def add_message():
         'timestamp': timestamp
     }
     # Store message in a list associated with the conversation
-    redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data))
+    redis_client.rpush(messages_key, json.dumps(message_data))
+    # Reset expiration for messages key on new message
+    redis_client.expire(messages_key, REDIS_EXPIRE_SECONDS)
     return jsonify(message_data), 201
 
 @app.route('/api/llm_cache/<prompt_hash>', methods=['GET'])
@@ -346,7 +359,12 @@ def api_chat():
             'title': "New Chat",
             'created_at': created_at
         })
+        redis_client.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
         redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
+        redis_client.expire(CONVERSATIONS_KEY, REDIS_EXPIRE_SECONDS)
+        messages_key = f"messages:{conversation_id}"
+        redis_client.rpush(messages_key, '')  # Add empty message to create the list
+        redis_client.expire(messages_key, REDIS_EXPIRE_SECONDS)
 
     if not question:
         return jsonify({"error": "Please enter a question."}), 400
@@ -354,6 +372,7 @@ def api_chat():
     # Save user message
     message_id = str(uuid.uuid4())
     timestamp = datetime.now().isoformat()
+    messages_key = f"messages:{conversation_id}"
     message_data = {
         'id': message_id,
         'conversation_id': conversation_id,
@@ -361,7 +380,11 @@ def api_chat():
         'content': question,
         'timestamp': timestamp
     }
-    redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data))
+    redis_client.rpush(messages_key, json.dumps(message_data))
+    # Reset expiration for messages key on new message
+    redis_client.expire(messages_key, REDIS_EXPIRE_SECONDS)
+    # Also reset expiration for conversation data
+    redis_client.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
 
     # Append user message to history for LLM processing
     history.append({"role": "user", "content": question})
@@ -380,6 +403,7 @@ def api_chat():
         # Save AI response
         message_id_ai = str(uuid.uuid4())
         timestamp_ai = datetime.now().isoformat()
+        messages_key = f"messages:{conversation_id}"
         message_data_ai = {
             'id': message_id_ai,
             'conversation_id': conversation_id,
@@ -387,7 +411,11 @@ def api_chat():
             'content': full_answer,
             'timestamp': timestamp_ai
         }
-        redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data_ai))
+        redis_client.rpush(messages_key, json.dumps(message_data_ai))
+        # Reset expiration for messages key on new message
+        redis_client.expire(messages_key, REDIS_EXPIRE_SECONDS)
+        # Also reset expiration for conversation data
+        redis_client.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
 
     return Response(generate(), mimetype='text/plain')
 

@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faHistory, faComment } from '@fortawesome/free-solid-svg-icons';
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
 import InputBar from "./components/InputBar";
@@ -373,20 +375,77 @@ export default function App() {
     }
   };
 
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 600);
+  const [showSidebar, setShowSidebar] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 600;
+      setIsMobile(mobile);
+      if (!mobile) {
+        setShowSidebar(false);
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const toggleSidebar = () => {
+    setShowSidebar(!showSidebar);
+  };
+
   return (
     <div className="app-root">
-      <Sidebar
-        conversations={conversations}
-        currentId={currentId}
-        setCurrentId={setCurrentId}
-        addConversation={addConversation}
-        showHistory={showHistory}
-        setShowHistory={setShowHistory}
-        loadConversations={loadConversations}
-      />
+      <div className={`sidebar-container ${showSidebar ? 'mobile-visible' : ''}`}>
+        <Sidebar
+          conversations={conversations}
+          currentId={currentId}
+          setCurrentId={(id) => {
+            setCurrentId(id);
+            if (isMobile) setShowSidebar(false);
+          }}
+          addConversation={() => {
+            addConversation();
+            if (isMobile) setShowSidebar(false);
+          }}
+          showHistory={showHistory}
+          setShowHistory={setShowHistory}
+          loadConversations={loadConversations}
+        />
+      </div>
       <div className="main">
-        {/* 删除按钮置顶，仅在有会话时显示 */}
-        <div style={{display:'flex',justifyContent:'flex-end',alignItems:'center',padding:'8px 0'}}>
+        <div className="mobile-header" style={{display: isMobile ? 'flex' : 'none'}}>
+          <button className="menu-toggle" onClick={toggleSidebar}>
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+            </svg>
+          </button>
+          <div className="header-title">
+            {currentConv?.name || '新会话'}
+          </div>
+          <div className="header-actions">
+            <button 
+              className="history-toggle" 
+              onClick={() => {
+                const newShowHistory = !showHistory;
+                setShowHistory(newShowHistory);
+                loadConversations(newShowHistory ? 'history' : 'active');
+              }}
+            >
+              <FontAwesomeIcon icon={showHistory ? faComment : faHistory} />
+            </button>
+            {conversations.length > 0 && (
+              <button 
+                className="delete-btn" 
+                onClick={() => setShowDelete(true)}
+              >
+                删除
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="desktop-header" style={{display: isMobile ? 'none' : 'flex', justifyContent:'flex-end', alignItems:'center', padding:'8px 0'}}>
           {conversations.length > 0 && (
             <button onClick={() => setShowDelete(true)} style={{background:'#f8f8fa',border:'1px solid #eee',borderRadius:8,padding:'6px 18px',fontSize:'1em',color:'#d9534f',marginRight:12}}>删除会话</button>
           )}
