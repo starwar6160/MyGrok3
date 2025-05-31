@@ -64,15 +64,27 @@ def redis_available():
         logger.warning("Redis connection failed. Falling back to in-memory storage.")
         return False
 
-def get_redis_connection():
-    """Get Redis connection or fallback to in-memory storage"""
-    if redis_available():
+def get_redis_connection(force_redis=False):
+    """
+    Get storage connection. By default, uses in-memory storage.
+    Only tries to use Redis if explicitly requested and available.
+    
+    Args:
+        force_redis (bool): If True, will try to use Redis if available.
+                          If False, will always use in-memory storage.
+    
+    Returns:
+        Union[redis.Redis, FallbackDict]: Redis connection or in-memory storage
+    """
+    if force_redis and redis_available():
         try:
             return redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1)
-        except (redis.ConnectionError, redis.TimeoutError):
+        except (redis.ConnectionError, redis.TimeoutError) as e:
             global REDIS_AVAILABLE
             REDIS_AVAILABLE = False
-            logger.warning("Redis connection failed. Falling back to in-memory storage.")
+            logger.warning(f"Redis connection failed: {e}. Using in-memory storage.")
+    
+    # Default to in-memory storage
     return fallback_storage
 
 # Determine if running inside Docker
@@ -183,50 +195,111 @@ REDIS_EXPIRE_SECONDS = 7 * 24 * 60 * 60  # 7 days in seconds
 
 # LLM 缓存函数
 def get_llm_cache(prompt_hash):
+    """Get cached LLM response if available"""
     try:
-        return get_redis_connection().get(f'llm_cache:{prompt_hash}')
+        # First try in-memory storage
+        cache_key = f'llm_cache:{prompt_hash}'
+        redis_conn = get_redis_connection()
+        
+        if isinstance(redis_conn, FallbackDict):
+            # Get from in-memory storage
+            return redis_conn.get(cache_key)
+        else:
+            # Fall back to Redis if explicitly requested
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+                if not isinstance(redis_conn_redis, FallbackDict):
+                    return redis_conn_redis.get(cache_key)
+            except Exception as e:
+                logger.warning(f"Failed to get from Redis cache: {e}")
+        
+        return None
     except Exception as e:
         logger.error(f"Error getting LLM cache: {e}")
         return None
 
 def set_llm_cache(prompt_hash, response):
+    """Cache LLM response"""
     try:
-        get_redis_connection().setex(f'llm_cache:{prompt_hash}', timedelta(days=7), response)
+        cache_key = f'llm_cache:{prompt_hash}'
+        redis_conn = get_redis_connection()
+        
+        # Save to in-memory storage
+        if isinstance(redis_conn, FallbackDict):
+            redis_conn[cache_key] = response
+        
+        # If Redis is available, also cache there
+        if redis_available():
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+                if not isinstance(redis_conn_redis, FallbackDict):
+                    redis_conn_redis.setex(cache_key, timedelta(days=7), response)
+            except Exception as e:
+                logger.warning(f"Failed to set Redis cache: {e}")
+        
+        return response
     except Exception as e:
         logger.error(f"Error setting LLM cache: {e}")
+        return None
 
 @app.route('/api/conversations', methods=['GET'])
 def get_conversations():
+    """Get all conversations from in-memory storage by default, with Redis as fallback"""
     try:
+        # First try to get from in-memory storage
         redis_conn = get_redis_connection()
+        conversations = []
+        
+        # Get conversations from in-memory storage
         if isinstance(redis_conn, FallbackDict):
-            # For in-memory storage, we need to handle keys differently
-            conversations = []
-            for key, value in redis_conn.items():
+            for key in list(redis_conn.keys()):
                 if key.startswith('conversation:'):
-                    conv_data = value if isinstance(value, dict) else {}
-                    conversations.append({
-                        'id': key.split(':')[1],
-                        'title': conv_data.get('title', 'Untitled'),
-                        'created_at': conv_data.get('created_at', ''),
-                        'updated_at': conv_data.get('updated_at', '')
-                    })
-            return jsonify(conversations)
-        else:
-            # Original Redis implementation
-            conv_ids = redis_conn.keys('conversation:*')
-            conversations = []
-            for conv_id in conv_ids:
-                conv_data = redis_conn.hgetall(conv_id)
-                if conv_data:
-                    conv_data = {k.decode('utf-8'): v.decode('utf-8') for k, v in conv_data.items()}
-                    conversations.append({
-                        'id': conv_id.decode('utf-8').split(':')[1],
-                        'title': conv_data.get('title', 'Untitled'),
-                        'created_at': conv_data.get('created_at', ''),
-                        'updated_at': conv_data.get('updated_at', '')
-                    })
-            return jsonify(conversations)
+                    try:
+                        conv_data = redis_conn[key]
+                        if isinstance(conv_data, dict):
+                            conversations.append({
+                                'id': key.split(':', 1)[1],
+                                'title': conv_data.get('title', 'New Conversation'),
+                                'created_at': conv_data.get('created_at', datetime.now().isoformat()),
+                                'updated_at': conv_data.get('updated_at', datetime.now().isoformat())
+                            })
+                    except Exception as e:
+                        logger.error(f"Error processing in-memory conversation {key}: {e}")
+        
+        # If no conversations in memory and Redis is available, try Redis
+        if not conversations and redis_available():
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+                if not isinstance(redis_conn_redis, FallbackDict):
+                    for key in redis_conn_redis.scan_iter('conversation:*'):
+                        try:
+                            conv_data = redis_conn_redis.hgetall(key)
+                            if conv_data:
+                                # Add to conversations list
+                                conversations.append({
+                                    'id': key.decode('utf-8').split(':', 1)[1],
+                                    'title': conv_data.get(b'title', b'New Conversation').decode('utf-8'),
+                                    'created_at': conv_data.get(b'created_at', datetime.now().isoformat().encode('utf-8')).decode('utf-8'),
+                                    'updated_at': conv_data.get(b'updated_at', datetime.now().isoformat().encode('utf-8')).decode('utf-8')
+                                })
+                                
+                                # Cache in memory for future use
+                                if isinstance(redis_conn, FallbackDict):
+                                    conv_id = key.decode('utf-8').split(':', 1)[1]
+                                    redis_conn[f'conversation:{conv_id}'] = {
+                                        'id': conv_id,
+                                        'title': conv_data.get(b'title', b'New Conversation').decode('utf-8'),
+                                        'created_at': conv_data.get(b'created_at', datetime.now().isoformat().encode('utf-8')).decode('utf-8'),
+                                        'updated_at': conv_data.get(b'updated_at', datetime.now().isoformat().encode('utf-8')).decode('utf-8')
+                                    }
+                        except Exception as e:
+                            logger.error(f"Error processing Redis conversation {key}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to get conversations from Redis: {e}")
+        
+        # Sort by updated_at in descending order
+        conversations.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+        return jsonify(conversations)
     except Exception as e:
         logger.error(f"Error getting conversations: {e}")
         return jsonify({'error': str(e)}), 500
@@ -234,11 +307,25 @@ def get_conversations():
 @app.route('/api/conversations', methods=['POST'])
 def create_conversation():
     try:
+        # Always use in-memory storage by default
         redis_conn = get_redis_connection()
+        
+        # Check if Redis is available for syncing
+        redis_available_flag = redis_available()
+        redis_conn_redis = None
+        if redis_available_flag:
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis for conversation creation: {e}")
+                redis_available_flag = False
+        
+        # Create conversation data
         conversation_id = str(uuid.uuid4())
-        title = "New Conversation"
+        title = "New Chat"  # Default title that will be updated later
         created_at = datetime.now().isoformat()
         
+        # Prepare conversation data
         conversation_data = {
             'id': conversation_id,
             'title': title,
@@ -246,95 +333,144 @@ def create_conversation():
             'updated_at': created_at
         }
         
+        # Save to in-memory storage
         if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
+            # Save conversation data
             redis_conn[f'conversation:{conversation_id}'] = conversation_data
-            # Create empty messages list
+            # Initialize empty messages list
             redis_conn[f'messages:{conversation_id}'] = []
-        else:
-            # Redis storage
-            redis_conn.hset(f'conversation:{conversation_id}', mapping={
-                'id': conversation_id,
-                'title': title,
-                'created_at': created_at,
-                'updated_at': created_at
-            })
-            redis_conn.expire(f'conversation:{conversation_id}', REDIS_EXPIRE_SECONDS)
-            # Create empty messages list
-            redis_conn.rpush(f'messages:{conversation_id}', '')
-            redis_conn.expire(f'messages:{conversation_id}', REDIS_EXPIRE_SECONDS)
+            
+            # Add to conversations list
+            conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+            if not isinstance(conversations, list):
+                conversations = []
+            if conversation_id not in conversations:
+                conversations.append(conversation_id)
+                redis_conn[CONVERSATIONS_KEY] = conversations
         
-        return jsonify({
-            'id': conversation_id, 
-            'title': title,
-            'created_at': created_at,
-            'messages': []
-        })
-    except Exception as e:
-        logger.error(f"Error creating conversation: {e}")
-        return jsonify({'error': 'Failed to create conversation'}), 500
-
-@app.route('/api/conversations/<conversation_id>', methods=['GET'])
-def get_conversation(conversation_id):
-    """Get conversation metadata"""
-    try:
-        redis_conn = get_redis_connection()
-        
-        if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
-            conv_data = redis_conn.get(f'conversation:{conversation_id}', {})
-            if not conv_data:
-                return jsonify({'error': 'Conversation not found'}), 404
+        # If Redis is available, also sync to Redis
+        if redis_available_flag and redis_conn_redis and not isinstance(redis_conn_redis, FallbackDict):
+            try:
+                # Save conversation data to Redis
+                redis_conn_redis.hmset(
+                    f'conversation:{conversation_id}',
+                    {
+                        'title': title,
+                        'created_at': created_at,
+                        'updated_at': created_at
+                    }
+                )
+                # Set expiration
+                redis_conn_redis.expire(f'conversation:{conversation_id}', REDIS_EXPIRE_SECONDS)
                 
-            title = conv_data.get('title', 'New Conversation')
-            created_at = conv_data.get('created_at', datetime.now().isoformat())
-        else:
-            # Redis storage
-            conv_data = redis_conn.hgetall(f'conversation:{conversation_id}')
-            if not conv_data:
-                return jsonify({'error': 'Conversation not found'}), 404
+                # Create empty messages list in Redis
+                messages_key = f'messages:{conversation_id}'
+                redis_conn_redis.rpush(messages_key, '')  # Add empty message to create the list
+                redis_conn_redis.expire(messages_key, REDIS_EXPIRE_SECONDS)
                 
-            title = conv_data.get(b'title', b'New Conversation').decode('utf-8')
-            created_at = conv_data.get(b'created_at', datetime.now().isoformat().encode('utf-8')).decode('utf-8')
+                # Add to conversations list in Redis
+                redis_conn_redis.lpush(CONVERSATIONS_KEY, conversation_id)
+                redis_conn_redis.expire(CONVERSATIONS_KEY, REDIS_EXPIRE_SECONDS)
+            except Exception as e:
+                logger.warning(f"Failed to sync new conversation to Redis: {e}")
         
         return jsonify({
             'id': conversation_id,
             'title': title,
             'created_at': created_at,
+            'updated_at': created_at
+        }), 201
+    except Exception as e:
+        logger.error(f"Error creating conversation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/conversations/<conversation_id>', methods=['GET'])
+def get_conversation(conversation_id):
+    """Get a specific conversation"""
+    try:
+        # First try to get from in-memory storage
+        redis_conn = get_redis_connection()
+        conv_data = {}
+        
+        # Try to get from in-memory storage
+        if isinstance(redis_conn, FallbackDict):
+            conv_data = redis_conn.get(f'conversation:{conversation_id}', {})
+            if not isinstance(conv_data, dict):
+                conv_data = {}
+        
+        # If not found in memory and Redis is available, try Redis
+        if not conv_data and redis_available():
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+                if not isinstance(redis_conn_redis, FallbackDict):
+                    redis_data = redis_conn_redis.hgetall(f'conversation:{conversation_id}')
+                    if redis_data:
+                        conv_data = {k.decode('utf-8'): v.decode('utf-8') for k, v in redis_data.items()}
+                        # Cache in memory for future use
+                        if isinstance(redis_conn, FallbackDict):
+                            redis_conn[f'conversation:{conversation_id}'] = conv_data
+            except Exception as e:
+                logger.warning(f"Failed to get conversation from Redis: {e}")
+        
+        if not conv_data:
+            return jsonify({'error': 'Conversation not found'}), 404
+            
+        return jsonify({
+            'id': conversation_id,
+            'title': conv_data.get('title', 'Untitled'),
+            'created_at': conv_data.get('created_at', ''),
+            'updated_at': conv_data.get('updated_at', ''),
             'messages': []  # Messages are loaded separately
         })
     except Exception as e:
         logger.error(f"Error getting conversation {conversation_id}: {e}")
-        return jsonify({'error': 'Failed to retrieve conversation'}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/conversations/<conversation_id>/messages', methods=['GET'])
 def get_conversation_messages_list(conversation_id):
     """Get all messages for a specific conversation"""
     try:
+        # First try to get from in-memory storage
         redis_conn = get_redis_connection()
         messages = []
         
+        # Try to get from in-memory storage
         if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
             message_list = redis_conn.get(f'messages:{conversation_id}', [])
             if not isinstance(message_list, list):
                 if message_list == '':  # Handle empty string case
                     message_list = []
                 else:
                     message_list = [message_list] if message_list else []
-        else:
-            # Redis storage
-            message_list = redis_conn.lrange(f'messages:{conversation_id}', 0, -1)
         
+        # If no messages in memory and Redis is available, try Redis
+        if (not messages or len(messages) == 0) and redis_available():
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+                if not isinstance(redis_conn_redis, FallbackDict):
+                    redis_messages = redis_conn_redis.lrange(f'messages:{conversation_id}', 0, -1)
+                    if redis_messages:
+                        message_list = []
+                        for msg in redis_messages:
+                            try:
+                                msg_data = json.loads(msg.decode('utf-8'))
+                                if isinstance(msg_data, dict) and 'content' in msg_data and 'role' in msg_data:
+                                    message_list.append(msg_data)
+                            except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                                logger.error(f"Error decoding Redis message: {e}")
+                        
+                        # Cache in memory for future use
+                        if isinstance(redis_conn, FallbackDict):
+                            redis_conn[f'messages:{conversation_id}'] = message_list
+            except Exception as e:
+                logger.warning(f"Failed to get messages from Redis: {e}")
+        
+        # Process messages
         for msg in message_list:
             try:
-                if isinstance(redis_conn, FallbackDict):
-                    # In in-memory mode, messages are already stored as dictionaries or JSON strings
-                    if isinstance(msg, str):
-                        msg = json.loads(msg)
-                else:
-                    # In Redis mode, messages are stored as JSON strings
-                    msg = json.loads(msg.decode('utf-8'))
+                # In in-memory mode, messages might already be dictionaries
+                if isinstance(msg, str):
+                    msg = json.loads(msg)
                 
                 # Ensure the message has all required fields
                 if isinstance(msg, dict) and 'content' in msg and 'role' in msg:
@@ -363,86 +499,57 @@ def get_conversation_messages_list(conversation_id):
         
     except Exception as e:
         logger.error(f"Error getting messages for conversation {conversation_id}: {e}")
-        return jsonify({'error': 'Failed to retrieve messages'}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/conversations/<conversation_id>', methods=['DELETE'])
 def delete_conversation(conversation_id):
+    """Delete a conversation and its messages"""
     try:
+        # Always use in-memory storage by default
         redis_conn = get_redis_connection()
         
-        if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
-            if f'conversation:{conversation_id}' in redis_conn:
-                del redis_conn[f'conversation:{conversation_id}']
-            if f'messages:{conversation_id}' in redis_conn:
-                del redis_conn[f'messages:{conversation_id}']
-        else:
-            # Redis storage
-            redis_conn.delete(f'conversation:{conversation_id}')
-            redis_conn.delete(f'messages:{conversation_id}')
-            # Remove from conversations list
-            redis_conn.lrem('conversations', 0, conversation_id)
+        # Check if Redis is available for syncing
+        redis_available_flag = redis_available()
+        redis_conn_redis = None
+        if redis_available_flag:
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis for deletion: {e}")
+                redis_available_flag = False
         
-        return jsonify({'status': 'success'})
+        # Delete from in-memory storage
+        if isinstance(redis_conn, FallbackDict):
+            # Delete conversation data
+            if f"conversation:{conversation_id}" in redis_conn:
+                del redis_conn[f"conversation:{conversation_id}"]
+            # Delete messages
+            if f"messages:{conversation_id}" in redis_conn:
+                del redis_conn[f"messages:{conversation_id}"]
+            
+            # Remove from conversations list
+            conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+            if not isinstance(conversations, list):
+                conversations = []
+            if conversation_id in conversations:
+                conversations.remove(conversation_id)
+                redis_conn[CONVERSATIONS_KEY] = conversations
+        
+        # If Redis is available, also delete from Redis
+        if redis_available_flag and redis_conn_redis:
+            try:
+                # Delete from Redis
+                redis_conn_redis.delete(f"conversation:{conversation_id}")
+                redis_conn_redis.delete(f"messages:{conversation_id}")
+                redis_conn_redis.lrem(CONVERSATIONS_KEY, 0, conversation_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete conversation from Redis: {e}")
+        
+        return jsonify({'message': 'Conversation deleted successfully'})
     except Exception as e:
         logger.error(f"Error deleting conversation {conversation_id}: {e}")
-        return jsonify({'error': 'Failed to delete conversation'}), 500
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/messages', methods=['POST'])
-def add_message():
-    try:
-        data = request.get_json()
-        conversation_id = data.get('conversation_id')
-        role = data.get('role')
-        content = data.get('content')
-        
-        if not all([conversation_id, role, content]):
-            return jsonify({'error': 'Missing required fields'}), 400
-        
-        message = {
-            'id': str(uuid.uuid4()),
-            'conversation_id': conversation_id,
-            'role': role,
-            'content': content,
-            'created_at': datetime.now().isoformat()
-        }
-        
-        redis_conn = get_redis_connection()
-        message_json = json.dumps(message)
-        updated_at = datetime.now().isoformat()
-        
-        if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
-            # Get or create messages list
-            messages_key = f'messages:{conversation_id}'
-            messages = redis_conn.get(messages_key, [])
-            if not isinstance(messages, list):
-                messages = []
-            messages.append(message)
-            redis_conn[messages_key] = messages
-            
-            # Update conversation's updated_at
-            conv_key = f'conversation:{conversation_id}'
-            conv_data = redis_conn.get(conv_key, {})
-            conv_data['updated_at'] = updated_at
-            
-            # If this is the first message, update the conversation title
-            if role == 'user' and len(messages) <= 2:  # First user message (after system message)
-                title = content[:50]  # Default to first 50 chars
-                if len(content) > 50:
-                    title += '...'
-                conv_data['title'] = title
-            
-            redis_conn[conv_key] = conv_data
-            
-        if response:
-            if isinstance(response, bytes):
-                response = response.decode('utf-8')
-            return jsonify({'response': response}), 200
-        return jsonify({'message': 'Cache not found'}), 404
-    except Exception as e:
-        logger.error(f"Error getting LLM cache: {e}")
-        return jsonify({'error': 'Failed to get cache'}), 500
 
 @app.route('/api/llm_cache', methods=['POST'])
 def set_llm_cache_api():
@@ -491,18 +598,26 @@ def api_title_summary():
         # Save the title if we have a conversation ID
         if conversation_id:
             try:
+                # Always use in-memory storage by default
                 redis_conn = get_redis_connection()
                 conversation_key = f"conversation:{conversation_id}"
                 
+                # Update in-memory storage
                 if isinstance(redis_conn, FallbackDict):
-                    # In-memory storage
                     conv_data = redis_conn.get(conversation_key, {})
                     conv_data['title'] = title
                     redis_conn[conversation_key] = conv_data
-                else:
-                    # Redis storage
-                    redis_conn.hset(conversation_key, "title", title)
-                    redis_conn.expire(conversation_key, REDIS_EXPIRE_SECONDS)
+                
+                # If Redis is available, also update there
+                if redis_available():
+                    try:
+                        redis_conn_redis = get_redis_connection(force_redis=True)
+                        if not isinstance(redis_conn_redis, FallbackDict):
+                            redis_conn_redis.hset(conversation_key, "title", title)
+                            redis_conn_redis.expire(conversation_key, REDIS_EXPIRE_SECONDS)
+                    except Exception as e:
+                        logger.warning(f"Failed to sync title to Redis: {e}")
+                
             except Exception as e:
                 logger.error(f"Error saving title for conversation {conversation_id}: {e}")
         
@@ -521,7 +636,18 @@ def api_chat():
         history = data.get("history", [])
         conversation_id = data.get("conversation_id")
 
+        # Always use in-memory storage by default
         redis_conn = get_redis_connection()
+        
+        # If Redis is available, we'll sync with it after updating in-memory
+        redis_available_flag = redis_available()
+        redis_conn_redis = None
+        if redis_available_flag:
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis: {e}")
+                redis_available_flag = False
 
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
@@ -535,24 +661,30 @@ def api_chat():
                 'updated_at': created_at
             }
             
-            if isinstance(redis_conn, FallbackDict):
-                # In-memory storage
-                redis_conn[f"conversation:{conversation_id}"] = conversation_data
-                # Initialize messages list
-                redis_conn[f"messages:{conversation_id}"] = []
-                # Add to conversations list
-                conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+            # Save to in-memory storage
+            redis_conn[f"conversation:{conversation_id}"] = conversation_data
+            # Initialize messages list
+            redis_conn[f"messages:{conversation_id}"] = []
+            # Add to conversations list
+            conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+            if not isinstance(conversations, list):
+                conversations = []
+            if conversation_id not in conversations:
                 conversations.append(conversation_id)
                 redis_conn[CONVERSATIONS_KEY] = conversations
-            else:
-                # Redis storage
-                redis_conn.hset(f"conversation:{conversation_id}", mapping=conversation_data)
-                redis_conn.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
-                redis_conn.lpush(CONVERSATIONS_KEY, conversation_id)
-                redis_conn.expire(CONVERSATIONS_KEY, REDIS_EXPIRE_SECONDS)
-                messages_key = f"messages:{conversation_id}"
-                redis_conn.rpush(messages_key, '')  # Add empty message to create the list
-                redis_conn.expire(messages_key, REDIS_EXPIRE_SECONDS)
+            
+            # If Redis is available, sync the new conversation
+            if redis_available_flag and redis_conn_redis:
+                try:
+                    redis_conn_redis.hset(f"conversation:{conversation_id}", mapping=conversation_data)
+                    redis_conn_redis.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
+                    redis_conn_redis.lpush(CONVERSATIONS_KEY, conversation_id)
+                    redis_conn_redis.expire(CONVERSATIONS_KEY, REDIS_EXPIRE_SECONDS)
+                    messages_key = f"messages:{conversation_id}"
+                    redis_conn_redis.rpush(messages_key, '')  # Add empty message to create the list
+                    redis_conn_redis.expire(messages_key, REDIS_EXPIRE_SECONDS)
+                except Exception as e:
+                    logger.warning(f"Failed to sync new conversation to Redis: {e}")
 
         if not question:
             return jsonify({"error": "Please enter a question."}), 400
@@ -569,19 +701,31 @@ def api_chat():
             'timestamp': timestamp
         }
 
-        if isinstance(redis_conn, FallbackDict):
-            # In-memory storage
-            messages = redis_conn.get(messages_key, [])
-            if messages == ['']:  # Handle the initial empty message
-                messages = []
-            messages.append(json.dumps(message_data))
-            redis_conn[messages_key] = messages
-            
-            # Update conversation's updated_at
-            conv_data = redis_conn.get(f"conversation:{conversation_id}", {})
-            conv_data['updated_at'] = timestamp
-            redis_conn[f"conversation:{conversation_id}"] = conv_data
-        else:
+        # Save to in-memory storage
+        messages = redis_conn.get(messages_key, [])
+        if messages == ['']:  # Handle the initial empty message
+            messages = []
+        messages.append(json.dumps(message_data))
+        redis_conn[messages_key] = messages
+        
+        # Update conversation's updated_at in memory
+        conv_data = redis_conn.get(f"conversation:{conversation_id}", {})
+        conv_data['updated_at'] = timestamp
+        redis_conn[f"conversation:{conversation_id}"] = conv_data
+        
+        # If Redis is available, sync the message and conversation update
+        if redis_available_flag and redis_conn_redis:
+            try:
+                # Sync the message
+                messages_key_redis = f"messages:{conversation_id}"
+                redis_conn_redis.rpush(messages_key_redis, json.dumps(message_data))
+                redis_conn_redis.expire(messages_key_redis, REDIS_EXPIRE_SECONDS)
+                
+                # Sync the conversation update
+                redis_conn_redis.hset(f"conversation:{conversation_id}", "updated_at", timestamp)
+                redis_conn_redis.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
+            except Exception as e:
+                logger.warning(f"Failed to sync message to Redis: {e}")
             # Redis storage
             redis_conn.rpush(messages_key, json.dumps(message_data))
             # Reset expiration for messages key on new message
@@ -643,6 +787,81 @@ def api_chat():
     except Exception as e:
         logger.error(f"Error in api_chat: {e}")
         return jsonify({"error": "An error occurred while processing your request"}), 500
+
+@app.route('/api/messages', methods=['POST'])
+def add_message():
+    try:
+        data = request.get_json()
+        conversation_id = data.get('conversation_id')
+        role = data.get('role')
+        content = data.get('content')
+        
+        if not all([conversation_id, role, content]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        # Always use in-memory storage by default
+        redis_conn = get_redis_connection()
+        
+        # Check if Redis is available for syncing
+        redis_available_flag = redis_available()
+        redis_conn_redis = None
+        if redis_available_flag:
+            try:
+                redis_conn_redis = get_redis_connection(force_redis=True)
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis for message addition: {e}")
+                redis_available_flag = False
+        
+        message_id = str(uuid.uuid4())
+        timestamp = datetime.now().isoformat()
+        
+        message_data = {
+            'id': message_id,
+            'conversation_id': conversation_id,
+            'role': role,
+            'content': content,
+            'timestamp': timestamp
+        }
+        
+        messages_key = f'messages:{conversation_id}'
+        
+        # Save to in-memory storage
+        if isinstance(redis_conn, FallbackDict):
+            messages = redis_conn.get(messages_key, [])
+            if messages == ['']:  # Handle the initial empty message
+                messages = []
+            messages.append(json.dumps(message_data))
+            redis_conn[messages_key] = messages
+            
+            # Update conversation's updated_at in memory
+            conv_data = redis_conn.get(f'conversation:{conversation_id}', {})
+            conv_data['updated_at'] = timestamp
+            redis_conn[f'conversation:{conversation_id}'] = conv_data
+        
+        # If Redis is available, sync the message and conversation update
+        if redis_available_flag and redis_conn_redis:
+            try:
+                # Sync the message
+                redis_conn_redis.rpush(messages_key, json.dumps(message_data))
+                redis_conn_redis.expire(messages_key, REDIS_EXPIRE_SECONDS)
+                
+                # Sync the conversation update
+                redis_conn_redis.hset(f'conversation:{conversation_id}', 'updated_at', timestamp)
+                redis_conn_redis.expire(f'conversation:{conversation_id}', REDIS_EXPIRE_SECONDS)
+            except Exception as e:
+                logger.warning(f"Failed to sync message to Redis: {e}")
+        
+        return jsonify({
+            'id': message_id,
+            'conversation_id': conversation_id,
+            'role': role,
+            'content': content,
+            'timestamp': timestamp
+        }), 201
+        
+    except Exception as e:
+        logger.error(f'Error adding message: {e}')
+        return jsonify({'error': str(e)}), 500
 
 def get_llm_cache_key(model, messages):
     # 用模型+消息内容哈希做key
