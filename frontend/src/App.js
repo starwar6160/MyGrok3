@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faHistory, faComment } from '@fortawesome/free-solid-svg-icons';
+import { faHistory, faComment, faPlus } from '@fortawesome/free-solid-svg-icons';
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
 import InputBar from "./components/InputBar";
@@ -62,7 +62,8 @@ export default function App() {
   // 新增状态
   const [lastFailedQuestion, setLastFailedQuestion] = useState("");
   const [showRetry, setShowRetry] = useState(false);
-  const [showHistory, setShowHistory] = useState(false); // New state for history
+  const [showHistory, setShowHistory] = useState(false);
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false); // Mobile sidebar visibility
 
   const [selectedModel, setSelectedModel] = useState("grok-3-mini");
   const [{ conversations, currentId }, setState] = useState({
@@ -159,7 +160,7 @@ export default function App() {
           ...prevState,
           conversations: prevState.conversations.map(conv => 
             conv.id === conversationId 
-              ? { ...conv, messages } 
+              ? { ...conv, messages, loaded: true } 
               : conv
           )
         }));
@@ -172,6 +173,9 @@ export default function App() {
   };
 
   const setCurrentId = async (id) => {
+    // Don't do anything if already current
+    if (id === currentId) return;
+    
     // First update the current ID
     setState(prevState => ({
       ...prevState,
@@ -181,9 +185,12 @@ export default function App() {
     
     // Check if we need to load messages for this conversation
     const currentConv = conversations.find(c => c.id === id);
-    if (currentConv && (!currentConv.messages || currentConv.messages.length === 0)) {
+    if (currentConv && (!currentConv.loaded && (!currentConv.messages || currentConv.messages.length === 0))) {
       await loadMessages(id);
     }
+    
+    // Close mobile sidebar if open
+    setShowMobileSidebar(false);
   };
 
   const currentConv = conversations.find(c => c.id === currentId);
@@ -376,14 +383,13 @@ export default function App() {
   };
 
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 600);
-  const [showSidebar, setShowSidebar] = useState(false);
 
   useEffect(() => {
     const handleResize = () => {
       const mobile = window.innerWidth <= 600;
       setIsMobile(mobile);
       if (!mobile) {
-        setShowSidebar(false);
+        setShowMobileSidebar(false);
       }
     };
     
@@ -391,39 +397,54 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const toggleSidebar = () => {
-    setShowSidebar(!showSidebar);
+  const toggleMobileSidebar = () => {
+    setShowMobileSidebar(!showMobileSidebar);
   };
 
+  // Mobile menu button
+  const mobileMenuButton = (
+    <button 
+      className="mobile-menu-button"
+      onClick={toggleMobileSidebar}
+      style={{
+        position: 'fixed',
+        top: '10px',
+        left: '10px',
+        zIndex: 100,
+        background: '#f8f8fa',
+        border: '1px solid #ddd',
+        borderRadius: '4px',
+        padding: '8px',
+        cursor: 'pointer'
+      }}
+    >
+      <FontAwesomeIcon icon={faHistory} />
+    </button>
+  );
+
   return (
-    <div className="app-root">
-      <div className={`sidebar-container ${showSidebar ? 'mobile-visible' : ''}`}>
+    <div className={`app-root ${showMobileSidebar ? 'mobile-sidebar-visible' : ''}`}>
+      {/* Sidebar */}
+      <div className={`sidebar-container ${showMobileSidebar ? 'mobile-visible' : ''}`}>
         <Sidebar
           conversations={conversations}
           currentId={currentId}
-          setCurrentId={(id) => {
-            setCurrentId(id);
-            if (isMobile) setShowSidebar(false);
-          }}
-          addConversation={() => {
-            addConversation();
-            if (isMobile) setShowSidebar(false);
-          }}
+          setCurrentId={setCurrentId}
+          addConversation={addConversation}
           showHistory={showHistory}
           setShowHistory={setShowHistory}
           loadConversations={loadConversations}
+          onClose={toggleMobileSidebar}
         />
       </div>
-      <div className="main">
-        <div className="mobile-header" style={{display: isMobile ? 'flex' : 'none'}}>
-          <button className="menu-toggle" onClick={toggleSidebar}>
-            <svg viewBox="0 0 24 24" width="24" height="24">
-              <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
-            </svg>
-          </button>
-          <div className="header-title">
-            {currentConv?.name || '新会话'}
-          </div>
+      
+      {/* Main Content */}
+      <div className="main" onClick={() => showMobileSidebar && setShowMobileSidebar(false)}>
+        {/* Mobile Menu Button */}
+        {isMobile && mobileMenuButton}
+        
+        {/* Desktop Header */}
+        <div className="desktop-header" style={{display: isMobile ? 'none' : 'flex', justifyContent:'flex-end', alignItems:'center', padding:'8px 0'}}>
           <div className="header-actions">
             <button 
               className="history-toggle" 
@@ -432,25 +453,72 @@ export default function App() {
                 setShowHistory(newShowHistory);
                 loadConversations(newShowHistory ? 'history' : 'active');
               }}
+              style={{
+                background: '#f8f8fa',
+                border: '1px solid #eee',
+                borderRadius: '4px',
+                padding: '6px 12px',
+                marginRight: '8px',
+                cursor: 'pointer'
+              }}
             >
               <FontAwesomeIcon icon={showHistory ? faComment : faHistory} />
+              {showHistory ? ' 活跃会话' : ' 历史会话'}
             </button>
             {conversations.length > 0 && (
               <button 
-                className="delete-btn" 
-                onClick={() => setShowDelete(true)}
+                onClick={() => setShowDelete(true)} 
+                style={{
+                  background: '#f8f8fa',
+                  border: '1px solid #eee',
+                  borderRadius: '8px',
+                  padding: '6px 18px',
+                  fontSize: '1em',
+                  color: '#d9534f',
+                  cursor: 'pointer'
+                }}
               >
-                删除
+                删除会话
               </button>
             )}
           </div>
         </div>
-        <div className="desktop-header" style={{display: isMobile ? 'none' : 'flex', justifyContent:'flex-end', alignItems:'center', padding:'8px 0'}}>
-          {conversations.length > 0 && (
-            <button onClick={() => setShowDelete(true)} style={{background:'#f8f8fa',border:'1px solid #eee',borderRadius:8,padding:'6px 18px',fontSize:'1em',color:'#d9534f',marginRight:12}}>删除会话</button>
+        
+        {/* Chat Window */}
+        <div className="chat-container">
+          {currentConv ? (
+            <ChatWindow messages={currentConv.messages || []} />
+          ) : (
+            <div className="no-conversation" style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              padding: '20px',
+              textAlign: 'center'
+            }}>
+              <p>没有找到对话，请创建一个新会话</p>
+              <button 
+                onClick={addConversation} 
+                style={{
+                  marginTop: '20px',
+                  padding: '8px 16px',
+                  background: '#007bff',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '1em'
+                }}
+              >
+                <FontAwesomeIcon icon={faPlus} /> 新会话
+              </button>
+            </div>
           )}
         </div>
-        <ChatWindow messages={currentConv ? currentConv.messages : []} />
+        
+        {/* Input Bar */}
         <InputBar
           onSend={sendMessage}
           onCopy={copyConversation}
@@ -459,6 +527,8 @@ export default function App() {
           onRetry={showRetry ? handleRetry : undefined}
         />
       </div>
+      
+      {/* Delete Confirmation Dialog */}
       {showDelete && (
         <ConfirmDialog
           onConfirm={deleteConversation}
