@@ -4,7 +4,7 @@ import hashlib
 import json
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
-import sqlite3
+import redis
 from datetime import datetime, timedelta
 import uuid
 import time
@@ -35,6 +35,65 @@ try:
 except ImportError:
     pass  # 如果没装CORS，先不报错
 
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    build_dir = Path(app.static_folder)
+    file_path = build_dir / path
+    if path != "" and file_path.exists():
+        return send_from_directory(build_dir, path)
+    else:
+        return send_from_directory(build_dir, "index.html")
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    answer = None
+    error = None
+    question = ""
+    selected_model = "grok-3-mini"  # Default model
+
+    # 流式API: POST JSON，支持上下文和缓存
+    if request.method == "POST" and request.content_type and request.content_type.startswith("application/json"):
+        data = request.get_json()
+        question = data.get("question", "").strip()
+        selected_model = data.get("model", "grok-3-mini")
+        history = data.get("history", [])  # 前端需传递历史消息（[{role, content}]）
+        conversation_id = data.get("conversation_id") or "default"
+        if not question:
+            return Response("Please enter a question.", mimetype="text/plain"), 400
+        # 拼接历史+当前
+        history.append({"role": "user", "content": question})
+        messages = summarize_history(history, max_chars=2000)
+        # --- 保存用户消息 ---
+        import time
+        
+        def stream_gen():
+            assistant_content = ""
+            for chunk in get_llm_cached(selected_model, messages, stream=True):
+                assistant_content += chunk
+                yield chunk
+            # --- 保存AI回复 ---
+            
+        return Response(stream_with_context(stream_gen()), mimetype='text/plain')
+
+    # 普通表单POST（无历史，仅单轮）
+    if request.method == "POST":
+        question = request.form.get("question", "").strip()
+        selected_model = request.form.get("model", "grok-3-mini")
+        if not question:
+            error = "Please enter a question."
+        else:
+            messages = [{"role": "user", "content": question}]
+            answer = get_llm_cached(selected_model, messages)
+    print('[FLASK] / index page response:', locals())
+    return render_template(
+        "index.html",
+        answer=answer,
+        error=error,
+        question=question,
+        selected_model=selected_model
+    )
+
 # Configure the xAI API client
 api_key = os.getenv("XAI_API_KEY")
 if not api_key:
@@ -46,7 +105,205 @@ client = openai.OpenAI(
 )
 
 # 简单 LLM cache（可换成 Redis 等）
-llm_cache = {}
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+
+# Redis keys for conversations and messages
+CONVERSATIONS_KEY = "conversations"
+CONVERSATIONS_TITLE_KEY = "conversation_titles"
+
+# LLM 缓存函数
+def get_llm_cache(prompt_hash):
+    response = redis_client.get(f"llm_cache:{prompt_hash}")
+    if response:
+        return response.decode('utf-8')
+    return None
+
+def set_llm_cache(prompt_hash, response):
+    redis_client.set(f"llm_cache:{prompt_hash}", response)
+    # Set expiration for cache entries (e.g., 7 days)
+    redis_client.expire(f"llm_cache:{prompt_hash}", timedelta(days=7))
+
+
+@app.route('/api/conversations', methods=['GET'])
+def get_conversations():
+    conversation_ids = redis_client.lrange(CONVERSATIONS_KEY, 0, -1)
+    conversations_list = []
+    for conv_id_bytes in conversation_ids:
+        conv_id = conv_id_bytes.decode('utf-8')
+        conv_data = redis_client.hgetall(f"conversation:{conv_id}")
+        if conv_data:
+            title = conv_data.get(b'title', b'').decode('utf-8')
+            created_at = conv_data.get(b'created_at', b'').decode('utf-8')
+            # Get the last message for the conversation
+            messages = redis_client.lrange(f"messages:{conv_id}", -1, -1)
+            last_message_content = ""
+            if messages:
+                last_message = json.loads(messages[0].decode('utf-8'))
+                last_message_content = last_message.get('content', '')
+
+            conversations_list.append({
+                'id': conv_id,
+                'title': title,
+                'created_at': created_at,
+                'last_message': last_message_content
+            })
+    # Sort by created_at in descending order
+    conversations_list.sort(key=lambda x: x['created_at'], reverse=True)
+    return jsonify(conversations_list)
+
+@app.route('/api/conversations', methods=['POST'])
+def create_conversation():
+    data = request.get_json()
+    title = data.get('title', 'New Conversation')
+    conversation_id = str(uuid.uuid4())
+    created_at = datetime.now().isoformat()
+
+    # Store conversation metadata in a hash
+    redis_client.hset(f"conversation:{conversation_id}", mapping={
+        'id': conversation_id,
+        'title': title,
+        'created_at': created_at
+    })
+    # Add conversation ID to a list for ordering
+    redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
+    return jsonify({'id': conversation_id, 'title': title, 'created_at': created_at}), 201
+
+@app.route('/api/conversations/<conversation_id>', methods=['GET'])
+def get_conversation_messages(conversation_id):
+    messages_data = redis_client.lrange(f"messages:{conversation_id}", 0, -1)
+    messages_list = []
+    for msg_bytes in messages_data:
+        messages_list.append(json.loads(msg_bytes.decode('utf-8')))
+    return jsonify(messages_list)
+
+@app.route('/api/conversations/<conversation_id>', methods=['DELETE'])
+def delete_conversation(conversation_id):
+    # Delete messages associated with the conversation
+    redis_client.delete(f"messages:{conversation_id}")
+    # Delete conversation metadata
+    redis_client.delete(f"conversation:{conversation_id}")
+    # Remove conversation ID from the list
+    redis_client.lrem(CONVERSATIONS_KEY, 0, conversation_id)
+    return jsonify({'message': 'Conversation deleted'}), 200
+
+@app.route('/api/messages', methods=['POST'])
+def add_message():
+    data = request.get_json()
+    conversation_id = data.get('conversation_id')
+    role = data.get('role')
+    content = data.get('content')
+    message_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+
+    message_data = {
+        'id': message_id,
+        'conversation_id': conversation_id,
+        'role': role,
+        'content': content,
+        'timestamp': timestamp
+    }
+    # Store message in a list associated with the conversation
+    redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data))
+    return jsonify(message_data), 201
+
+@app.route('/api/llm_cache/<prompt_hash>', methods=['GET'])
+def get_llm_cache_api(prompt_hash):
+    response = get_llm_cache(prompt_hash)
+    if response:
+        return jsonify({'response': response}), 200
+    return jsonify({'message': 'Cache not found'}), 404
+
+@app.route('/api/llm_cache', methods=['POST'])
+def set_llm_cache_api():
+    data = request.get_json()
+    prompt_hash = data.get('hash')
+    response_content = data.get('response')
+    if prompt_hash and response_content:
+        set_llm_cache(prompt_hash, response_content)
+        return jsonify({'message': 'Cache set successfully'}), 201
+    return jsonify({'message': 'Invalid data'}), 400
+
+@app.route("/api/title_summary", methods=["POST"])
+def api_title_summary():
+    data = request.get_json()
+    print('[FLASK] /api/title_summary received:', data)
+    messages = data.get("messages", [])
+    conversation_id = data.get("conversation_id")
+    prompt = (
+        "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
+        + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
+    )
+    title = ask_grok("grok-3-mini", [{"role": "user", "content": prompt}])
+    # 只取前10字，去除空白
+    title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
+    print('[FLASK] /api/title_summary response:', title)
+    if conversation_id:
+        redis_client.hset(f"conversation:{conversation_id}", "title", title)
+    return jsonify({"title": title or "新会话"})
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    print('[FLASK] /api/chat received:', request.get_json())
+    data = request.get_json()
+    question = data.get("question", "").strip()
+    selected_model = data.get("model", "grok-3-mini")
+    history = data.get("history", [])
+    conversation_id = data.get("conversation_id")
+
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        # If it's a new conversation, save it with a default title for now
+        # The title will be updated later by /api/title_summary
+        created_at = datetime.now().isoformat()
+        redis_client.hset(f"conversation:{conversation_id}", mapping={
+            'id': conversation_id,
+            'title': "New Chat",
+            'created_at': created_at
+        })
+        redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
+
+    if not question:
+        return jsonify({"error": "Please enter a question."}), 400
+
+    # Save user message
+    message_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    message_data = {
+        'id': message_id,
+        'conversation_id': conversation_id,
+        'role': "user",
+        'content': question,
+        'timestamp': timestamp
+    }
+    redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data))
+
+    # Append user message to history for LLM processing
+    history.append({"role": "user", "content": question})
+    messages = summarize_history(history, max_chars=2000)
+
+    print(f"[api_chat] question={question!r}")
+    print(f"[api_chat] model={selected_model!r}")
+    print(f"[api_chat] history={history!r}")
+
+    def generate():
+        answer_chunks = get_llm_cached(selected_model, messages, stream=True)
+        full_answer = ''
+        for chunk in answer_chunks:
+            full_answer += chunk
+            yield chunk
+        # Save AI response
+        message_id_ai = str(uuid.uuid4())
+        timestamp_ai = datetime.now().isoformat()
+        message_data_ai = {
+            'id': message_id_ai,
+            'conversation_id': conversation_id,
+            'role': "assistant",
+            'content': full_answer,
+            'timestamp': timestamp_ai
+        }
+        redis_client.rpush(f"messages:{conversation_id}", json.dumps(message_data_ai))
+
+    return Response(generate(), mimetype='text/plain')
 
 def get_llm_cache_key(model, messages):
     # 用模型+消息内容哈希做key
@@ -123,353 +380,4 @@ def ask_grok(model, messages):
         return f"Unexpected Error: {e}"
 
 # Database configuration
-import os
 
-def ensure_db_dir_exists(db_path):
-    dir_name = os.path.dirname(db_path)
-    if dir_name and not os.path.exists(dir_name):
-        os.makedirs(dir_name, exist_ok=True)
-
-DATABASE = os.getenv('SQLITE_DATABASE')
-if not DATABASE:
-    # Default: local file for dev, or /data/chat_topics.db for Docker if /data exists
-    if os.path.isdir('/data'):
-        DATABASE = '/data/chat_topics.db'
-    else:
-        DATABASE = 'chat_topics.db'
-
-ensure_db_dir_exists(DATABASE)
-
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def save_conversation_to_file(conversation_id, messages):
-    """Saves the conversation messages to a text file."""
-    file_path = os.path.join(CONVERSATIONS_DIR, f"{conversation_id}.txt")
-    print(f"[DEBUG] Attempting to save conversation to: {file_path}")
-    print(f"[DEBUG] Messages content: {messages}")
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            for message in messages:
-                f.write(f"{message['role']}: {message['content']}\n")
-        print(f"[DEBUG] Successfully saved conversation to: {file_path}")
-    except Exception as e:
-        print(f"[ERROR] Failed to save conversation to file {file_path}: {e}")
-
-def init_db():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_active TEXT NOT NULL,
-                last_file_update TEXT
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                sender TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (conversation_id) REFERENCES conversations (id)
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS code_snippets (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                code TEXT,
-                language TEXT,
-                created_at TEXT,
-                conversation_id TEXT,
-                FOREIGN KEY (conversation_id) REFERENCES conversations (id)
-            )
-        ''')
-        conn.commit()
-
-# Initialize the database on app startup
-with app.app_context():
-    init_db()
-
-def save_code_snippet(title, code, language='python', conversation_id=None):
-    snippet_id = str(uuid.uuid4())
-    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO code_snippets (id, title, code, language, created_at, conversation_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (snippet_id, title, code, language, created_at, conversation_id)
-        )
-        conn.commit()
-    return snippet_id
-
-def save_conversation(conversation_id, title):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO conversations (id, title) VALUES (?, ?)", (conversation_id, title))
-        conn.commit()
-
-def update_conversation_timestamp(conversation_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE conversations SET last_active = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,))
-        conn.commit()
-
-def get_messages_for_conversation(conversation_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY timestamp", (conversation_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-def save_message(conversation_id, role, content):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO messages (conversation_id, role, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-                       (conversation_id, role, role, content, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_react(path):
-    build_dir = Path(app.static_folder)
-    file_path = build_dir / path
-    if path != "" and file_path.exists():
-        return send_from_directory(build_dir, path)
-    else:
-        return send_from_directory(build_dir, "index.html")
-
-@app.route("/", methods=["GET", "POST"])
-def index():
-    answer = None
-    error = None
-    question = ""
-    selected_model = "grok-3-mini"  # Default model
-
-    # 流式API: POST JSON，支持上下文和缓存
-    if request.method == "POST" and request.content_type and request.content_type.startswith("application/json"):
-        data = request.get_json()
-        question = data.get("question", "").strip()
-        selected_model = data.get("model", "grok-3-mini")
-        history = data.get("history", [])  # 前端需传递历史消息（[{role, content}]）
-        conversation_id = data.get("conversation_id") or "default"
-        if not question:
-            return Response("Please enter a question.", mimetype="text/plain"), 400
-        # 拼接历史+当前
-        history.append({"role": "user", "content": question})
-        messages = summarize_history(history, max_chars=2000)
-        # --- 保存用户消息 ---
-        import time
-        
-        def stream_gen():
-            assistant_content = ""
-            for chunk in get_llm_cached(selected_model, messages, stream=True):
-                assistant_content += chunk
-                yield chunk
-            # --- 保存AI回复 ---
-            
-        return Response(stream_with_context(stream_gen()), mimetype='text/plain')
-
-    # 普通表单POST（无历史，仅单轮）
-    if request.method == "POST":
-        question = request.form.get("question", "").strip()
-        selected_model = request.form.get("model", "grok-3-mini")
-        if not question:
-            error = "Please enter a question."
-        else:
-            messages = [{"role": "user", "content": question}]
-            answer = get_llm_cached(selected_model, messages)
-    print('[FLASK] / index page response:', locals())
-    return render_template(
-        "index.html",
-        answer=answer,
-        error=error,
-        question=question,
-        selected_model=selected_model
-    )
-
-@app.route("/api/title_summary", methods=["POST"])
-def api_title_summary():
-    data = request.get_json()
-    print('[FLASK] /api/title_summary received:', data)
-    messages = data.get("messages", [])
-    conversation_id = data.get("conversation_id")
-    prompt = (
-        "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
-        + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
-    )
-    title = ask_grok("grok-3-mini", [{"role": "user", "content": prompt}])
-    # 只取前10字，去除空白
-    title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
-    print('[FLASK] /api/title_summary response:', title)
-    if conversation_id:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id))
-            conn.commit()
-    update_conversation_timestamp(conversation_id)
-    return jsonify({"title": title or "新会话"})
-
-def get_conversations(active_within_hours=None, older_than_hours=None):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        query = "SELECT id, title, created_at, last_active FROM conversations"
-        conditions = []
-        params = []
-
-        if active_within_hours is not None:
-            active_time_threshold = datetime.now() - timedelta(hours=active_within_hours)
-            conditions.append("last_active >= ?")
-            params.append(active_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
-
-        if older_than_hours is not None:
-            older_time_threshold = datetime.now() - timedelta(hours=older_than_hours)
-            conditions.append("last_active < ?")
-            params.append(older_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
-        
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY last_active DESC"
-        
-        cursor.execute(query, params)
-        conversations = []
-        for row in cursor.fetchall():
-            conv = dict(row)
-            conv['messages'] = get_messages_for_conversation(conv['id'])
-            conversations.append(conv)
-        return conversations
-
-def get_messages_for_conversation(conversation_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC", (conversation_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-@app.route("/api/conversations", methods=["GET"])
-def api_conversations():
-    conv_type = request.args.get('type', 'active') # 'active' or 'history'
-
-    if conv_type == 'active':
-        # Return conversations active in the last 24 hours
-        conversations = get_conversations(active_within_hours=24)
-    elif conv_type == 'history':
-        # Return conversations older than 24 hours
-        conversations = get_conversations(older_than_hours=24)
-    else:
-        # Default to all if no type specified or invalid type
-        conversations = get_conversations()
-
-    return jsonify(conversations)
-
-@app.route("/api/chat", methods=["POST"])
-def api_chat():
-    print('[FLASK] /api/chat received:', request.get_json())
-    data = request.get_json()
-    question = data.get("question", "").strip()
-    selected_model = data.get("model", "grok-3-mini")
-    history = data.get("history", [])
-    conversation_id = data.get("conversation_id")
-
-    if not conversation_id:
-        conversation_id = str(uuid.uuid4())
-        # If it's a new conversation, save it with a default title for now
-        # The title will be updated later by /api/title_summary
-        save_conversation(conversation_id, "New Chat")
-
-    if not question:
-        return jsonify({"error": "Please enter a question."}), 400
-
-    # Save user message
-    save_message(conversation_id, "user", question)
-
-    # Append user message to history for LLM processing
-    history.append({"role": "user", "content": question})
-    messages = summarize_history(history, max_chars=2000)
-
-    print(f"[api_chat] question={question!r}")
-    print(f"[api_chat] model={selected_model!r}")
-    print(f"[api_chat] history={history!r}")
-
-    def generate():
-        answer_chunks = get_llm_cached(selected_model, messages, stream=True)
-        full_answer = ''
-        for chunk in answer_chunks:
-            full_answer += chunk
-            yield chunk
-        # Save AI response
-        save_message(conversation_id, "assistant", full_answer)
-        update_conversation_timestamp(conversation_id)
-        # Immediately save conversation to file for debugging
-        messages.append({"role": "assistant", "content": full_answer})
-        save_conversation_to_file(conversation_id, messages)
-
-    return Response(generate(), mimetype='text/plain')
-
-@app.route("/api/backup_db", methods=["POST"])
-def backup_database():
-    try:
-        backup_dir = os.path.join(DATA_DIR, 'backups')
-        os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, f"database_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.db")
-
-        source_conn = sqlite3.connect(DATABASE)
-        backup_conn = sqlite3.connect(backup_path)
-        with backup_conn:
-            source_conn.backup(backup_conn)
-        source_conn.close()
-        backup_conn.close()
-        return jsonify({"message": f"Database backed up successfully to {backup_path}"}), 200
-    except Exception as e:
-        return jsonify({"error": f"Failed to backup database: {str(e)}"}), 500
-
-import socket
-
-def find_free_port(start_port=5000, max_tries=10):
-    port = start_port
-    for _ in range(max_tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('0.0.0.0', port)) != 0:
-                return port
-            port += 1
-    raise RuntimeError("No free port found in range.")
-
-# Function to run in a background thread for periodic file updates
-def background_file_updater():
-    while True:
-        with app.app_context():
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                # Select conversations that haven't been updated in the last 10 seconds
-                # and whose last_active is more recent than last_file_update
-                cursor.execute("""
-                    SELECT id, last_active, last_file_update FROM conversations
-                    WHERE last_active < ? AND (last_file_update IS NULL OR last_active > last_file_update)
-                """, (datetime.now() - timedelta(seconds=10),))
-                conversations_to_update = cursor.fetchall()
-                print(f"[DEBUG] Conversations to update: {conversations_to_update}")
-
-                for conv in conversations_to_update:
-                    conversation_id = conv['id']
-                    print(f"Updating file for conversation: {conversation_id}")
-                    messages = get_messages_for_conversation(conversation_id)
-                    save_conversation_to_file(conversation_id, messages)
-                    # Update last_file_update in the database
-                    cursor.execute(
-                        "UPDATE conversations SET last_file_update = ? WHERE id = ?",
-                        (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), conversation_id)
-                    )
-                conn.commit()
-        time.sleep(5) # Check every 5 seconds for debugging
-
-# Start the background file updater thread
-background_thread = threading.Thread(target=background_file_updater, daemon=True)
-background_thread.start()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
