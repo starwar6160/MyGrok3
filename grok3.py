@@ -144,22 +144,33 @@ def save_conversation_to_file(conversation_id, messages):
 def init_db():
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_file_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL,
+                last_active TEXT NOT NULL,
+                last_file_update TEXT
             )
         ''')
-        cursor.execute('''
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
+                sender TEXT NOT NULL,
                 content TEXT NOT NULL,
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations (id)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS code_snippets (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                code TEXT,
+                language TEXT,
+                created_at TEXT,
+                conversation_id TEXT,
                 FOREIGN KEY (conversation_id) REFERENCES conversations (id)
             )
         ''')
@@ -168,6 +179,18 @@ def init_db():
 # Initialize the database on app startup
 with app.app_context():
     init_db()
+
+def save_code_snippet(title, code, language='python', conversation_id=None):
+    snippet_id = str(uuid.uuid4())
+    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO code_snippets (id, title, code, language, created_at, conversation_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (snippet_id, title, code, language, created_at, conversation_id)
+        )
+        conn.commit()
+    return snippet_id
 
 def save_conversation(conversation_id, title):
     with get_db_connection() as conn:
