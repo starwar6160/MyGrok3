@@ -8,10 +8,21 @@ import sqlite3
 from datetime import datetime, timedelta
 import uuid
 import time
+import threading
 
-# Define the data directory
-DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
-CONVERSATIONS_DIR = os.path.join(DATA_DIR, 'conversations')
+# Determine if running inside Docker
+IS_DOCKER = os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER", False)
+
+if IS_DOCKER:
+    DATA_DIR = "/app/data"
+else:
+    # Use a local data directory if not in Docker
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
+
+# Ensure the data directories exist
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 
 # === React 静态页面托管 ===
@@ -137,9 +148,15 @@ def get_db_connection():
 def save_conversation_to_file(conversation_id, messages):
     """Saves the conversation messages to a text file."""
     file_path = os.path.join(CONVERSATIONS_DIR, f"{conversation_id}.txt")
-    with open(file_path, 'w', encoding='utf-8') as f:
-        for message in messages:
-            f.write(f"{message['role']}: {message['content']}\n")
+    print(f"[DEBUG] Attempting to save conversation to: {file_path}")
+    print(f"[DEBUG] Messages content: {messages}")
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            for message in messages:
+                f.write(f"{message['role']}: {message['content']}\n")
+        print(f"[DEBUG] Successfully saved conversation to: {file_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save conversation to file {file_path}: {e}")
 
 def init_db():
     with get_db_connection() as conn:
@@ -157,6 +174,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
                 sender TEXT NOT NULL,
                 content TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
@@ -213,8 +231,8 @@ def get_messages_for_conversation(conversation_id):
 def save_message(conversation_id, role, content):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
-                       (conversation_id, role, content))
+        cursor.execute("INSERT INTO messages (conversation_id, role, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+                       (conversation_id, role, role, content, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         conn.commit()
 
 @app.route('/', defaults={'path': ''})
@@ -295,6 +313,7 @@ def api_title_summary():
             cursor = conn.cursor()
             cursor.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id))
             conn.commit()
+    update_conversation_timestamp(conversation_id)
     return jsonify({"title": title or "新会话"})
 
 def get_conversations(active_within_hours=None, older_than_hours=None):
@@ -386,8 +405,9 @@ def api_chat():
         # Save AI response
         save_message(conversation_id, "assistant", full_answer)
         update_conversation_timestamp(conversation_id)
-
-
+        # Immediately save conversation to file for debugging
+        messages.append({"role": "assistant", "content": full_answer})
+        save_conversation_to_file(conversation_id, messages)
 
     return Response(generate(), mimetype='text/plain')
 
@@ -425,31 +445,31 @@ def background_file_updater():
         with app.app_context():
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Select conversations that haven't been updated in the last 5 minutes
+                # Select conversations that haven't been updated in the last 10 seconds
                 # and whose last_active is more recent than last_file_update
                 cursor.execute("""
                     SELECT id, last_active, last_file_update FROM conversations
-                    WHERE last_active < ? AND last_active > last_file_update
-                """, (datetime.now() - timedelta(minutes=5),))
+                    WHERE last_active < ? AND (last_file_update IS NULL OR last_active > last_file_update)
+                """, (datetime.now() - timedelta(seconds=10),))
                 conversations_to_update = cursor.fetchall()
+                print(f"[DEBUG] Conversations to update: {conversations_to_update}")
 
                 for conv in conversations_to_update:
                     conversation_id = conv['id']
                     print(f"Updating file for conversation: {conversation_id}")
-                    all_messages = get_messages_for_conversation(conversation_id)
-                    save_conversation_to_file(conversation_id, all_messages)
-                    # Update last_file_update timestamp in DB
-                    cursor.execute("UPDATE conversations SET last_file_update = ? WHERE id = ?",
-                                   (datetime.now(), conversation_id))
+                    messages = get_messages_for_conversation(conversation_id)
+                    save_conversation_to_file(conversation_id, messages)
+                    # Update last_file_update in the database
+                    cursor.execute(
+                        "UPDATE conversations SET last_file_update = ? WHERE id = ?",
+                        (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), conversation_id)
+                    )
                 conn.commit()
-        time.sleep(30) # Check every 30 seconds
+        time.sleep(5) # Check every 5 seconds for debugging
 
-# Start the background thread when the application starts
-@app.before_first_request
-def start_background_updater():
-    thread = threading.Thread(target=background_file_updater)
-    thread.daemon = True # Allow the main program to exit even if the thread is running
-    thread.start()
+# Start the background file updater thread
+background_thread = threading.Thread(target=background_file_updater, daemon=True)
+background_thread.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
