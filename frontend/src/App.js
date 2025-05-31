@@ -157,35 +157,60 @@ export default function App() {
     const loadInitialData = async () => {
       try {
         // First try to load from backend
-        await loadConversations('active');
+        const loadedConversations = await loadConversations('active');
+        
+        // If conversations were loaded, ensure we have a current conversation
+        if (loadedConversations && loadedConversations.length > 0) {
+          const currentConv = loadedConversations.find(c => c.id === currentId) || loadedConversations[0];
+          
+          // Load messages for the current conversation
+          if (currentConv && (!currentConv.loaded || !currentConv.messages || currentConv.messages.length === 0)) {
+            await loadMessages(currentConv.id);
+          }
+          
+          return;
+        }
         
         // If no conversations were loaded, create a new one
-        if (conversations.length === 0) {
-          const newConv = { 
-            id: uuidv4(), 
-            name: "新会话", 
-            title: "新会话",
-            messages: [] 
-          };
-          setState(prevState => ({
-            conversations: [newConv],
-            currentId: newConv.id
-          }));
-        }
+        const newConv = { 
+          id: uuidv4(), 
+          name: "新会话", 
+          title: "新会话",
+          messages: [],
+          loaded: false
+        };
+        
+        setState({
+          conversations: [newConv],
+          currentId: newConv.id
+        });
+        
       } catch (error) {
         console.error('Error loading initial data:', error);
         
         // Fallback to local storage if backend fails
-        const saved = localStorage.getItem("grok3_conversations");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setState({
-              conversations: parsed,
-              currentId: localStorage.getItem("grok3_current_id") || parsed[0].id
-            });
-            return;
+        try {
+          const saved = localStorage.getItem("grok3_conversations");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const savedCurrentId = localStorage.getItem("grok3_current_id") || parsed[0].id;
+              setState({
+                conversations: parsed,
+                currentId: savedCurrentId
+              });
+              
+              // Load messages for the current conversation
+              const currentConv = parsed.find(c => c.id === savedCurrentId) || parsed[0];
+              if (currentConv && (!currentConv.loaded || !currentConv.messages || currentConv.messages.length === 0)) {
+                await loadMessages(currentConv.id);
+              }
+              
+              return;
+            }
           }
+        } catch (e) {
+          console.error('Error loading from localStorage:', e);
         }
         
         // If all else fails, create a new conversation
@@ -193,8 +218,10 @@ export default function App() {
           id: uuidv4(), 
           name: "新会话", 
           title: "新会话",
-          messages: [] 
+          messages: [],
+          loaded: false
         };
+        
         setState({
           conversations: [newConv],
           currentId: newConv.id
