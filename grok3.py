@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Global flag to track Redis availability
 REDIS_AVAILABLE = True
+REDIS_HOST = os.getenv('REDIS_HOST', 'mredis')  # 使用容器名
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
 
 class FallbackDict(dict):
     """A dictionary that logs when fallback is used"""
@@ -284,77 +286,69 @@ def redis_available():
             return True
         return False
     except Exception as e:
+        _redis_available = False
         logger.debug(f"Redis availability check failed: {e}")
         return False
 
 def get_redis_connection(force_redis=False):
     """
     Get storage connection. Uses in-memory storage by default, or Redis if available and we've switched to it.
-    
-    Args:
-        force_redis (bool): If True, will try to use Redis if available.
-                         If False, will use in-memory storage unless we've switched to Redis.
-    
-    Returns:
-        Union[redis.Redis, FallbackDict]: Redis connection or in-memory storage
     """
-    # If we're not forcing Redis and not in Redis mode, use fallback
-    if not (_using_redis or force_redis):
-        logger.debug("Using in-memory storage (not forcing Redis and not in Redis mode)")
-        return fallback_storage
+    global _using_redis, _redis_available, _redis_connection
     
+    # If we're not forcing Redis and not in Redis mode, use in-memory fallback
+    if not force_redis and not _using_redis:
+        logger.debug("Using in-memory storage (not forcing Redis and not in Redis mode)")
+        return FallbackDict()
+    
+    # If we already have a working Redis connection, return it
+    if _redis_connection is not None and _redis_available:
+        try:
+            _redis_connection.ping()
+            return _redis_connection
+        except:
+            _redis_available = False
+            _redis_connection = None
+    
+    # Try to establish a new Redis connection
     logger.debug(f"Getting Redis connection (force_redis={force_redis}, _using_redis={_using_redis})")
     
-    # Try to get a Redis connection
-    for host in ['localhost', '127.0.0.1']:
-        try:
-            logger.debug(f"Attempting to connect to Redis at {host}:6379")
-            conn = redis.Redis(
-                host=host,
-                port=6379,
-                db=0,
-                socket_connect_timeout=2,
-                socket_keepalive=True,
-                socket_keepalive_options={
-                    socket.TCP_KEEPIDLE: 60,  # Start sending keepalive packets after 60s of idle
-                    socket.TCP_KEEPINTVL: 10,  # Send keepalive packets every 10s
-                    socket.TCP_KEEPCNT: 6      # Consider the connection dead after 6 failed keepalives
-                },
-                retry_on_timeout=True,
-                health_check_interval=30,
-                decode_responses=False  # Keep raw bytes for compatibility
-            )
-            
-            # Test the connection
-            conn.ping()
-            logger.info(f"Successfully connected to Redis at {host}:6379")
-            
-            # If we got here, Redis is available
-            global _redis_available
-            _redis_available = True
-            
-            return conn
-            
-        except redis.ConnectionError as e:
-            logger.debug(f"ConnectionError connecting to Redis at {host}:6379: {e}")
-            if host == '127.0.0.1':  # If both attempts failed
-                logger.warning("Failed to connect to Redis on both localhost and 127.0.0.1")
-                _redis_available = False
-                return fallback_storage
-                
-        except redis.RedisError as e:
-            logger.error(f"Redis error: {e}")
-            _redis_available = False
-            return fallback_storage
-            
-        except Exception as e:
-            logger.error(f"Unexpected error connecting to Redis: {e}", exc_info=True)
-            _redis_available = False
-            return fallback_storage
+    # Use the configured Redis host and port
+    try:
+        logger.debug(f"Attempting to connect to Redis at {REDIS_HOST}:{REDIS_PORT}")
+        conn = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=0,
+            socket_connect_timeout=2,
+            socket_keepalive=True,
+            socket_keepalive_options={
+                socket.TCP_KEEPIDLE: 60,   # Start sending keepalive after 60s of idle
+                socket.TCP_KEEPINTVL: 10,  # Send keepalive every 10s
+                socket.TCP_KEEPCNT: 6      # Consider dead after 6 failed keepalives
+            },
+            retry_on_timeout=True,
+            health_check_interval=30,
+            decode_responses=False  # Keep raw bytes for compatibility
+        )
+        conn.ping()
+        _redis_connection = conn
+        _redis_available = True
+        _using_redis = True
+        logger.info(f"Successfully connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+        return conn
+    except redis.ConnectionError as e:
+        logger.warning(f"Connection error to Redis at {REDIS_HOST}:{REDIS_PORT}: {e}")
+    except redis.RedisError as e:
+        logger.error(f"Redis error: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error connecting to Redis: {e}", exc_info=True)
     
-    # Should never reach here
+    # If we get here, connection failed
     _redis_available = False
-    return fallback_storage
+    _using_redis = False
+    logger.warning("Using in-memory fallback storage.")
+    return FallbackDict()
 
 # Determine if running inside Docker
 IS_DOCKER = os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER", False)
@@ -1329,13 +1323,13 @@ def ask_grok(model, messages):
 
 # Database configuration
 try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1)
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, socket_connect_timeout=1, socket_keepalive=True)
     redis_client.ping()
-    logger.info("Connected to Redis successfully")
+    logger.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT} successfully")
     REDIS_AVAILABLE = True
 except (redis.ConnectionError, redis.TimeoutError) as e:
     REDIS_AVAILABLE = False
-    logger.warning(f"Could not connect to Redis: {e}. Using in-memory fallback storage.")
+    logger.warning(f"Could not connect to Redis at {REDIS_HOST}:{REDIS_PORT}: {e}. Using in-memory fallback storage.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))  # Default to 5001 if PORT not set
