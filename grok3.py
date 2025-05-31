@@ -25,7 +25,7 @@ CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 
-# === React 静态页面托管 ===
+# === React 静态页面 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="frontend/build")
 
 # 允许跨域
@@ -35,15 +35,19 @@ try:
 except ImportError:
     pass  # 如果没装CORS，先不报错
 
-@app.route('/', defaults={'path': ''})
+@app.route('/')
 @app.route('/<path:path>')
-def serve_react(path):
-    build_dir = Path(app.static_folder)
-    file_path = build_dir / path
-    if path != "" and file_path.exists():
-        return send_from_directory(build_dir, path)
-    else:
-        return send_from_directory(build_dir, "index.html")
+def serve_react(path='index.html'):
+    # Handle API routes
+    if path.startswith('api/'):
+        return 'Not Found', 404
+    
+    # Handle static files
+    if path != 'index.html' and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    
+    # Serve index.html for all other routes to support client-side routing
+    return send_from_directory(app.template_folder, 'index.html')
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -381,3 +385,6 @@ def ask_grok(model, messages):
 
 # Database configuration
 
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5001))  # Default to 5001 if PORT not set
+    app.run(host='0.0.0.0', port=port, debug=True)

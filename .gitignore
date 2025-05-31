@@ -3,3 +3,4 @@ __pycache__/*.pyc
 chat_history.db
 
 chat_topics.db
+venv
