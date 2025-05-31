@@ -2,6 +2,7 @@ import openai
 import os
 import hashlib
 import json
+import socket
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
 import redis
@@ -12,8 +13,12 @@ import threading
 import logging
 from functools import wraps
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG to see all messages
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Global flag to track Redis availability
@@ -46,45 +51,309 @@ class FallbackDict(dict):
             return 1
         return 0
 
+# Global variables for Redis state management
+_redis_available = False
+_redis_last_check = 0
+_redis_check_interval = 60  # seconds
+_using_redis = False  # Whether we're currently using Redis as primary storage
+_redis_lock = threading.Lock()
+
 # Initialize in-memory fallback storage
 fallback_storage = FallbackDict()
 
-def redis_available():
-    """Check if Redis is available"""
-    global REDIS_AVAILABLE
-    if not REDIS_AVAILABLE:
-        return False
+def sync_to_redis():
+    """
+    Sync all data from in-memory storage to Redis.
+    This is called when Redis becomes available.
+    """
+    global _using_redis
     
     try:
-        r = redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1)
-        r.ping()
-        return True
-    except (redis.ConnectionError, redis.TimeoutError):
-        REDIS_AVAILABLE = False
-        logger.warning("Redis connection failed. Falling back to in-memory storage.")
+        logger.info("Attempting to get Redis connection...")
+        redis_conn = get_redis_connection(force_redis=True)
+        if isinstance(redis_conn, FallbackDict):
+            logger.error("Failed to get Redis connection: FallbackDict returned")
+            return False  # Redis not available
+            
+        logger.info("Got Redis connection, getting in-memory storage...")
+        # Get in-memory storage
+        in_memory = get_redis_connection()
+        if not isinstance(in_memory, FallbackDict):
+            logger.info("Already using Redis, no need to sync")
+            return False  # Already using Redis
+            
+        with _redis_lock:
+            logger.info("Acquired lock, starting sync...")
+            # Get all conversation IDs
+            conversation_ids = in_memory.get("conversations", [])
+            if not isinstance(conversation_ids, list):
+                logger.warning(f"conversation_ids is not a list: {conversation_ids}")
+                conversation_ids = []
+            
+            logger.info(f"Found {len(conversation_ids)} conversations to sync")
+            
+            # Sync each conversation and its messages
+            for i, conv_id in enumerate(conversation_ids, 1):
+                try:
+                    logger.debug(f"Syncing conversation {i}/{len(conversation_ids)}: {conv_id}")
+                    # Sync conversation data
+                    conv_key = f'conversation:{conv_id}'
+                    conv_data = in_memory.get(conv_key, {})
+                    if conv_data:
+                        if isinstance(conv_data, str):
+                            conv_data = json.loads(conv_data)
+                        logger.debug(f"Setting conversation data for {conv_key}")
+                        redis_conn.hmset(conv_key, conv_data)
+                        redis_conn.expire(conv_key, REDIS_EXPIRE_SECONDS)
+                    
+                    # Sync messages
+                    messages_key = f'messages:{conv_id}'
+                    messages = in_memory.get(messages_key, [])
+                    if messages:
+                        logger.debug(f"Syncing {len(messages)} messages for {messages_key}")
+                        # Delete any existing messages in Redis
+                        redis_conn.delete(messages_key)
+                        # Add all messages
+                        for msg in messages:
+                            if isinstance(msg, str):
+                                msg_data = json.loads(msg)
+                                redis_conn.rpush(messages_key, json.dumps(msg_data))
+                            else:
+                                redis_conn.rpush(messages_key, json.dumps(msg))
+                        redis_conn.expire(messages_key, REDIS_EXPIRE_SECONDS)
+                except Exception as e:
+                    logger.error(f"Error syncing conversation {conv_id}: {e}", exc_info=True)
+                    continue  # Continue with next conversation even if one fails
+            
+            # Sync conversations list
+            if conversation_ids:
+                try:
+                    logger.info("Syncing conversations list...")
+                    redis_conn.delete("conversations")
+                    redis_conn.rpush("conversations", *conversation_ids)
+                    redis_conn.expire("conversations", REDIS_EXPIRE_SECONDS)
+                    logger.info("Successfully synced conversations list")
+                except Exception as e:
+                    logger.error(f"Error syncing conversations list: {e}", exc_info=True)
+                    return False
+            
+            # Mark that we're now using Redis
+            _using_redis = True
+            logger.info("Successfully completed Redis sync")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Critical error in sync_to_redis: {e}", exc_info=True)
+        return False
+
+def check_redis_availability():
+    """Check if Redis is available and sync data if it becomes available"""
+    global _redis_available, _redis_last_check, _using_redis, _redis_check_interval
+    
+    current_time = time.time()
+    time_since_last_check = current_time - _redis_last_check
+    
+    # Only proceed if enough time has passed since last check
+    if time_since_last_check < _redis_check_interval and not _redis_available:
+        return _redis_available
+    
+    _redis_last_check = current_time
+    
+    # If we're already using Redis, just verify the connection
+    if _using_redis:
+        try:
+            conn = redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1, socket_keepalive=True)
+            conn.ping()
+            if not _redis_available:  # Only log on state change
+                logger.info("Connected to Redis successfully")
+            _redis_available = True
+            return True
+        except Exception as e:
+            _redis_available = False
+            _using_redis = False  # Fall back to in-memory storage
+            logger.error(f"Lost connection to Redis: {e}")
+            return False
+    
+    # If we're not using Redis yet, try to connect and sync
+    try:
+        # Try both localhost and 127.0.0.1
+        for host in ['localhost', '127.0.0.1']:
+            try:
+                conn = redis.Redis(host=host, port=6379, db=0, socket_connect_timeout=2, socket_keepalive=True)
+                conn.ping()
+                logger.info(f"Successfully connected to Redis at {host}:6379")
+                break
+            except Exception as e:
+                logger.debug(f"Failed to connect to Redis at {host}:6379: {e}")
+                if host == '127.0.0.1':  # If both attempts failed
+                    raise
+        
+        if not _redis_available:  # Only log on state change
+            logger.info("Redis is now available, attempting to sync data...")
+            
+        if sync_to_redis():
+            logger.info("Successfully synced data to Redis")
+            _redis_available = True
+            _using_redis = True
+            _redis_check_interval = 60  # Reset to normal check interval
+            return True
+        else:
+            # Increase check interval on failure (exponential backoff, max 5 minutes)
+            _redis_check_interval = min(300, _redis_check_interval * 2)
+            logger.warning(f"Failed to sync data to Redis, will retry in {_redis_check_interval} seconds")
+            return False
+            
+    except redis.ConnectionError as e:
+        if _redis_available:  # Only log on state change
+            logger.error(f"Redis connection failed: {e}")
+        _redis_available = False
+        # Increase check interval on failure (exponential backoff, max 5 minutes)
+        _redis_check_interval = min(300, _redis_check_interval * 2)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error checking Redis: {e}")
+        _redis_available = False
+        _redis_check_interval = min(300, _redis_check_interval * 2)
+        return False
+
+# Start the Redis monitoring thread
+def start_redis_monitor():
+    def monitor():
+        while True:
+            try:
+                check_redis_availability()
+            except Exception as e:
+                logger.error(f"Error in Redis monitor thread: {e}")
+            finally:
+                # Always sleep to prevent tight loops on error
+                time.sleep(_redis_check_interval)
+    
+    thread = threading.Thread(target=monitor, daemon=True, name="RedisMonitor")
+    thread.start()
+    return thread
+
+# Start the monitor when the module loads
+_redis_monitor_thread = start_redis_monitor()
+
+# Log initial storage status
+def log_storage_status():
+    if _redis_available and _using_redis:
+        logger.info("Using Redis as the primary storage")
+    else:
+        logger.info("Using in-memory storage (Redis is not available)")
+
+# Initial status log
+log_storage_status()
+
+# Update status when Redis becomes available
+_original_sync_to_redis = sync_to_redis
+def wrapped_sync_to_redis():
+    result = _original_sync_to_redis()
+    if result:
+        log_storage_status()
+    return result
+sync_to_redis = wrapped_sync_to_redis
+
+def redis_available():
+    """
+    Check if Redis is available by attempting to get a connection.
+    Updates the global _redis_available state.
+    """
+    global _redis_available
+    
+    # If we think Redis is available, verify it with a quick ping
+    if _redis_available:
+        try:
+            # Try to get a connection with a short timeout
+            conn = get_redis_connection(force_redis=True)
+            if isinstance(conn, FallbackDict):
+                _redis_available = False
+                return False
+            conn.ping()
+            return True
+        except Exception as e:
+            logger.debug(f"Redis ping failed: {e}")
+            _redis_available = False
+            return False
+    
+    # If we don't think Redis is available, do a thorough check
+    try:
+        conn = get_redis_connection(force_redis=True)
+        if not isinstance(conn, FallbackDict):
+            _redis_available = True
+            return True
+        return False
+    except Exception as e:
+        logger.debug(f"Redis availability check failed: {e}")
         return False
 
 def get_redis_connection(force_redis=False):
     """
-    Get storage connection. By default, uses in-memory storage.
-    Only tries to use Redis if explicitly requested and available.
+    Get storage connection. Uses in-memory storage by default, or Redis if available and we've switched to it.
     
     Args:
         force_redis (bool): If True, will try to use Redis if available.
-                          If False, will always use in-memory storage.
+                         If False, will use in-memory storage unless we've switched to Redis.
     
     Returns:
         Union[redis.Redis, FallbackDict]: Redis connection or in-memory storage
     """
-    if force_redis and redis_available():
-        try:
-            return redis.Redis(host='localhost', port=6379, db=0, socket_connect_timeout=1)
-        except (redis.ConnectionError, redis.TimeoutError) as e:
-            global REDIS_AVAILABLE
-            REDIS_AVAILABLE = False
-            logger.warning(f"Redis connection failed: {e}. Using in-memory storage.")
+    # If we're not forcing Redis and not in Redis mode, use fallback
+    if not (_using_redis or force_redis):
+        logger.debug("Using in-memory storage (not forcing Redis and not in Redis mode)")
+        return fallback_storage
     
-    # Default to in-memory storage
+    logger.debug(f"Getting Redis connection (force_redis={force_redis}, _using_redis={_using_redis})")
+    
+    # Try to get a Redis connection
+    for host in ['localhost', '127.0.0.1']:
+        try:
+            logger.debug(f"Attempting to connect to Redis at {host}:6379")
+            conn = redis.Redis(
+                host=host,
+                port=6379,
+                db=0,
+                socket_connect_timeout=2,
+                socket_keepalive=True,
+                socket_keepalive_options={
+                    socket.TCP_KEEPIDLE: 60,  # Start sending keepalive packets after 60s of idle
+                    socket.TCP_KEEPINTVL: 10,  # Send keepalive packets every 10s
+                    socket.TCP_KEEPCNT: 6      # Consider the connection dead after 6 failed keepalives
+                },
+                retry_on_timeout=True,
+                health_check_interval=30,
+                decode_responses=False  # Keep raw bytes for compatibility
+            )
+            
+            # Test the connection
+            conn.ping()
+            logger.info(f"Successfully connected to Redis at {host}:6379")
+            
+            # If we got here, Redis is available
+            global _redis_available
+            _redis_available = True
+            
+            return conn
+            
+        except redis.ConnectionError as e:
+            logger.debug(f"ConnectionError connecting to Redis at {host}:6379: {e}")
+            if host == '127.0.0.1':  # If both attempts failed
+                logger.warning("Failed to connect to Redis on both localhost and 127.0.0.1")
+                _redis_available = False
+                return fallback_storage
+                
+        except redis.RedisError as e:
+            logger.error(f"Redis error: {e}")
+            _redis_available = False
+            return fallback_storage
+            
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to Redis: {e}", exc_info=True)
+            _redis_available = False
+            return fallback_storage
+    
+    # Should never reach here
+    _redis_available = False
     return fallback_storage
 
 # Determine if running inside Docker
@@ -175,18 +444,48 @@ def index():
         selected_model=selected_model
     )
 
-# Configure the xAI API client
-api_key = os.getenv("XAI_API_KEY")
-if not api_key:
-    raise ValueError("XAI_API_KEY environment variable not set")
+def initialize_openai_client():
+    """Initialize the OpenAI client with proper error handling and logging."""
+    try:
+        api_key = os.environ.get("XAI_API_KEY")
+        if not api_key:
+            raise ValueError("XAI_API_KEY environment variable is not set")
+            
+        logger.info("Initializing OpenAI client...")
+        client = openai.OpenAI(
+            base_url="https://api.x.ai/v1",
+            api_key=api_key,
+            timeout=30.0  # Add a timeout for API requests
+        )
+        
+        # Test the connection with a simple request
+        logger.info("Testing OpenAI client connection...")
+        client.models.list()  # This will raise an exception if the API key is invalid
+        
+        logger.info("Successfully initialized and tested OpenAI client")
+        return client
+        
+    except Exception as e:
+        error_msg = f"Failed to initialize OpenAI client: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return None
 
-client = openai.OpenAI(
-    base_url="https://api.x.ai/v1",
-    api_key=api_key
-)
-
-# 简单 LLM cache（可换成 Redis 等）
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Initialize the client
+try:
+    client = initialize_openai_client()
+    if client is None:
+        logger.error("OpenAI client initialization failed - chat functionality will not work")
+        # Create a dummy client to prevent attribute errors
+        client = type('DummyClient', (), {'chat': type('DummyChat', (), {
+            'completions': type('DummyCompletions', (), {
+                'create': lambda *args, **kwargs: {'choices': [{'message': {'content': 'Error: OpenAI client not properly initialized. Please check the logs.'}}]}
+            })
+        })})()
+    else:
+        logger.info("OpenAI client is ready to use")
+except Exception as e:
+    logger.error(f"Unexpected error during OpenAI client initialization: {e}", exc_info=True)
+    client = None
 
 # Redis keys for conversations and messages
 CONVERSATIONS_KEY = "conversations"
@@ -662,11 +961,17 @@ def api_chat():
             }
             
             # Save to in-memory storage
-            redis_conn[f"conversation:{conversation_id}"] = conversation_data
-            # Initialize messages list
-            redis_conn[f"messages:{conversation_id}"] = []
-            # Add to conversations list
-            conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+            if isinstance(redis_conn, FallbackDict):
+                redis_conn[f"conversation:{conversation_id}"] = conversation_data
+                # Initialize messages list
+                redis_conn[f"messages:{conversation_id}"] = []
+                # Add to conversations list
+                conversations = redis_conn.get(CONVERSATIONS_KEY, [])
+                if not isinstance(conversations, list):
+                    conversations = []
+                if conversation_id not in conversations:
+                    conversations.append(conversation_id)
+                    redis_conn[CONVERSATIONS_KEY] = conversations
             if not isinstance(conversations, list):
                 conversations = []
             if conversation_id not in conversations:
@@ -701,17 +1006,20 @@ def api_chat():
             'timestamp': timestamp
         }
 
-        # Save to in-memory storage
-        messages = redis_conn.get(messages_key, [])
-        if messages == ['']:  # Handle the initial empty message
-            messages = []
-        messages.append(json.dumps(message_data))
-        redis_conn[messages_key] = messages
-        
-        # Update conversation's updated_at in memory
-        conv_data = redis_conn.get(f"conversation:{conversation_id}", {})
-        conv_data['updated_at'] = timestamp
-        redis_conn[f"conversation:{conversation_id}"] = conv_data
+        # Save to in-memory storage if using FallbackDict
+        if isinstance(redis_conn, FallbackDict):
+            messages = redis_conn.get(messages_key, [])
+            if messages == ['']:  # Handle the initial empty message
+                messages = []
+            messages.append(json.dumps(message_data))
+            redis_conn[messages_key] = messages
+            
+            # Update conversation's updated_at in memory
+            conv_data = redis_conn.get(f"conversation:{conversation_id}", {})
+            if not isinstance(conv_data, dict):
+                conv_data = {}
+            conv_data['updated_at'] = timestamp
+            redis_conn[f"conversation:{conversation_id}"] = conv_data
         
         # If Redis is available, sync the message and conversation update
         if redis_available_flag and redis_conn_redis:
@@ -726,14 +1034,9 @@ def api_chat():
                 redis_conn_redis.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
             except Exception as e:
                 logger.warning(f"Failed to sync message to Redis: {e}")
-            # Redis storage
-            redis_conn.rpush(messages_key, json.dumps(message_data))
-            # Reset expiration for messages key on new message
-            redis_conn.expire(messages_key, REDIS_EXPIRE_SECONDS)
-            # Also reset expiration for conversation data
-            redis_conn.expire(f"conversation:{conversation_id}", REDIS_EXPIRE_SECONDS)
-            # Update conversation's updated_at
-            redis_conn.hset(f"conversation:{conversation_id}", "updated_at", timestamp)
+            # This block is redundant as we already synced to Redis above
+            # The error was occurring because we were trying to use Redis commands on FallbackDict
+            pass
 
         # Append user message to history for LLM processing
         history.append({"role": "user", "content": question})
@@ -907,35 +1210,122 @@ def summarize_history(history, max_chars=4000, keep_last_n=8, summary_max_len=10
 # Function to query Grok model
 def ask_grok_stream(model, messages):
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True
-        )
-        for chunk in response:
-            if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-    except openai.NotFoundError as e:
-        yield f"API Error: {e}"
+        logger.info(f"[ask_grok_stream] Starting streaming request with model: {model}")
+        logger.debug(f"[ask_grok_stream] Messages: {json.dumps(messages, indent=2, ensure_ascii=False)}")
+        
+        # Validate model name
+        if not model or not isinstance(model, str):
+            error_msg = f"Invalid model name: {model}"
+            logger.error(error_msg)
+            yield f"Error: {error_msg}"
+            return
+            
+        # Validate messages format
+        if not messages or not isinstance(messages, list):
+            error_msg = f"Invalid messages format: {messages}"
+            logger.error(error_msg)
+            yield f"Error: {error_msg}"
+            return
+            
+        for msg in messages:
+            if not isinstance(msg, dict) or 'role' not in msg or 'content' not in msg:
+                error_msg = f"Invalid message format in: {msg}"
+                logger.error(error_msg)
+                yield f"Error: {error_msg}"
+                return
+        
+        # Check if client is properly initialized
+        if not hasattr(client, 'chat') or not hasattr(client.chat.completions, 'create'):
+            error_msg = "OpenAI client is not properly initialized"
+            logger.error(error_msg)
+            yield f"Error: {error_msg}"
+            return
+        
+        try:
+            # Make the streaming API request
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+                temperature=0.7,
+                max_tokens=2000
+            )
+            
+            # Stream the response chunks
+            for chunk in response:
+                if (hasattr(chunk, 'choices') and 
+                    len(chunk.choices) > 0 and 
+                    hasattr(chunk.choices[0], 'delta') and
+                    hasattr(chunk.choices[0].delta, 'content') and 
+                    chunk.choices[0].delta.content is not None):
+                    content = chunk.choices[0].delta.content
+                    yield content
+                
+        except Exception as e:
+            error_msg = f"Error during streaming: {type(e).__name__} - {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            yield f"\n\nError: {error_msg}"
+            
+    except openai.APIError as e:
+        error_msg = f"OpenAI API Error: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        yield f"\n\nAPI Error: {error_msg}"
     except Exception as e:
-        yield f"Unexpected Error: {e}"
+        error_msg = f"Unexpected error: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        yield f"\n\nError: {error_msg}"
 
 # 兼容非流式（表单POST）
 def ask_grok(model, messages):
     try:
-        print(f"[ask_grok] model={model!r}, messages={messages!r}")
+        logger.info(f"[ask_grok] Starting request with model: {model}")
+        logger.debug(f"[ask_grok] Messages: {json.dumps(messages, indent=2, ensure_ascii=False)}")
+        
+        # Validate model name
+        if not model or not isinstance(model, str):
+            error_msg = f"Invalid model name: {model}"
+            logger.error(error_msg)
+            return f"Error: {error_msg}"
+            
+        # Validate messages format
+        if not messages or not isinstance(messages, list):
+            error_msg = f"Invalid messages format: {messages}"
+            logger.error(error_msg)
+            return f"Error: {error_msg}"
+            
+        for msg in messages:
+            if not isinstance(msg, dict) or 'role' not in msg or 'content' not in msg:
+                error_msg = f"Invalid message format in: {msg}"
+                logger.error(error_msg)
+                return f"Error: {error_msg}"
+        
+        # Make the API request
+        start_time = time.time()
         response = client.chat.completions.create(
             model=model,
-            messages=messages
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2000
         )
-        print(f"[ask_grok] response={response}")
+        
+        duration = time.time() - start_time
+        logger.info(f"[ask_grok] Request completed in {duration:.2f}s")
+        
+        if not response.choices or not response.choices[0].message:
+            error_msg = "Empty or invalid response from API"
+            logger.error(f"{error_msg}: {response}")
+            return f"Error: {error_msg}"
+            
         return response.choices[0].message.content
-    except openai.NotFoundError as e:
-        print(f"[ask_grok] NotFoundError: {e}")
-        return f"API Error: {e}"
+        
+    except openai.APIError as e:
+        error_msg = f"OpenAI API Error: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return f"API Error: {error_msg}"
     except Exception as e:
-        print(f"[ask_grok] Exception: {e}")
-        return f"Unexpected Error: {e}"
+        error_msg = f"Unexpected error: {type(e).__name__} - {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return f"Error: {error_msg}"
 
 # Database configuration
 try:
