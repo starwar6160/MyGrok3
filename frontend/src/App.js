@@ -80,51 +80,129 @@ export default function App() {
         // Ensure each conversation has the required fields
         fetchedConversations = fetchedConversations.map(conv => ({
           ...conv,
+          id: String(conv.id), // Ensure ID is a string for consistency
           name: conv.name || conv.title || '新会话', // Use name or title, default to '新会话'
           messages: Array.isArray(conv.messages) ? conv.messages : []
         }));
 
-        setState(prevState => {
-          let newCurrentId = prevState.currentId;
-          
-          // If current conversation is not in the fetched list, default to the first one
-          if (!fetchedConversations.find(c => c.id === newCurrentId) && fetchedConversations.length > 0) {
-            newCurrentId = fetchedConversations[0].id;
-          } else if (fetchedConversations.length === 0) {
-            // If no conversations fetched, create a new one
-            const newConv = { 
-              id: uuidv4(), 
-              name: "新会话", 
-              title: "新会话",
-              messages: [] 
-            };
-            fetchedConversations.push(newConv);
-            newCurrentId = newConv.id;
-          }
-          
-          // Only save to localStorage if we're not in history mode
-          if (type !== 'history') {
-            localStorage.setItem("grok3_conversations", JSON.stringify(fetchedConversations));
-            localStorage.setItem("grok3_current_id", String(newCurrentId));
-          }
-          
-          return { 
-            conversations: fetchedConversations, 
-            currentId: newCurrentId 
+        // If no conversations, create a new one
+        if (fetchedConversations.length === 0 && type !== 'history') {
+          const newConv = { 
+            id: uuidv4(), 
+            name: "新会话", 
+            title: "新会话",
+            messages: [] 
           };
-        });
+          fetchedConversations = [newConv];
+        }
+
+        // Only update state if we have conversations or we're showing history
+        if (fetchedConversations.length > 0 || type === 'history') {
+          setState(prevState => {
+            // Preserve currentId if it's still valid
+            const currentIdStillValid = fetchedConversations.some(c => c.id === prevState.currentId);
+            const newCurrentId = currentIdStillValid ? prevState.currentId : 
+              (fetchedConversations[0] ? fetchedConversations[0].id : null);
+            
+            // Only save to localStorage if we're not in history mode
+            if (type !== 'history' && newCurrentId) {
+              localStorage.setItem("grok3_conversations", JSON.stringify(fetchedConversations));
+              localStorage.setItem("grok3_current_id", String(newCurrentId));
+            }
+            
+            return { 
+              conversations: fetchedConversations, 
+              currentId: newCurrentId || prevState.currentId
+            };
+          });
+
+          // If we have a current conversation, load its messages
+          const currentId = fetchedConversations[0]?.id;
+          if (currentId) {
+            await loadMessages(currentId);
+          }
+        }
+        
+        return fetchedConversations;
+      } else {
+        throw new Error(`Failed to load conversations: ${response.status}`);
       }
     } catch (e) {
       console.error("Error loading conversations:", e);
+      // If we're not showing history, try to load from localStorage
+      if (type !== 'history') {
+        const saved = localStorage.getItem("grok3_conversations");
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const currentId = localStorage.getItem("grok3_current_id");
+              setState({
+                conversations: parsed,
+                currentId: currentId || (parsed[0] ? parsed[0].id : null)
+              });
+              return parsed;
+            }
+          } catch (parseError) {
+            console.error("Error parsing saved conversations:", parseError);
+          }
+        }
+      }
+      throw e; // Re-throw to be caught by the caller
     }
   };
 
+  // Load conversations when component mounts
   useEffect(() => {
-    getInitialState().then(state => {
-      setState(state);
-      localStorage.setItem("grok3_conversations", JSON.stringify(state.conversations));
-      localStorage.setItem("grok3_current_id", String(state.currentId));
-    });
+    const loadInitialData = async () => {
+      try {
+        // First try to load from backend
+        await loadConversations('active');
+        
+        // If no conversations were loaded, create a new one
+        if (conversations.length === 0) {
+          const newConv = { 
+            id: uuidv4(), 
+            name: "新会话", 
+            title: "新会话",
+            messages: [] 
+          };
+          setState(prevState => ({
+            conversations: [newConv],
+            currentId: newConv.id
+          }));
+        }
+      } catch (error) {
+        console.error('Error loading initial data:', error);
+        
+        // Fallback to local storage if backend fails
+        const saved = localStorage.getItem("grok3_conversations");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setState({
+              conversations: parsed,
+              currentId: localStorage.getItem("grok3_current_id") || parsed[0].id
+            });
+            return;
+          }
+        }
+        
+        // If all else fails, create a new conversation
+        const newConv = { 
+          id: uuidv4(), 
+          name: "新会话", 
+          title: "新会话",
+          messages: [] 
+        };
+        setState({
+          conversations: [newConv],
+          currentId: newConv.id
+        });
+      }
+    };
+    
+    loadInitialData();
   }, []);
 
   const [showDelete, setShowDelete] = useState(false);
@@ -151,25 +229,59 @@ export default function App() {
     };
   });
   const loadMessages = async (conversationId) => {
+    if (!conversationId) {
+      console.error('No conversation ID provided to loadMessages');
+      return [];
+    }
+
     try {
       const response = await fetch(`/api/conversations/${conversationId}/messages`);
       if (response.ok) {
         const messages = await response.json();
+        
+        // Ensure messages is an array
+        const validMessages = Array.isArray(messages) ? messages : [];
+        
         // Update the conversation with the loaded messages
-        setState(prevState => ({
-          ...prevState,
-          conversations: prevState.conversations.map(conv => 
+        setState(prevState => {
+          const updatedConversations = prevState.conversations.map(conv => 
             conv.id === conversationId 
-              ? { ...conv, messages, loaded: true } 
+              ? { 
+                  ...conv, 
+                  messages: validMessages, 
+                  loaded: true,
+                  // Preserve name if it exists, otherwise use the first user message as title
+                  name: conv.name || validMessages.find(m => m.role === 'user')?.content?.substring(0, 30) || '新会话'
+                } 
               : conv
-          )
-        }));
-        return messages;
+          );
+          
+          // Save to localStorage if this is the current conversation
+          if (prevState.currentId === conversationId) {
+            localStorage.setItem("grok3_conversations", JSON.stringify(updatedConversations));
+          }
+          
+          return {
+            ...prevState,
+            conversations: updatedConversations
+          };
+        });
+        
+        return validMessages;
+      } else {
+        throw new Error(`Failed to load messages: ${response.status}`);
       }
     } catch (error) {
       console.error('Error loading messages:', error);
+      
+      // Fallback to any messages we might have in memory
+      const currentConv = conversations.find(c => c.id === conversationId);
+      if (currentConv?.messages?.length > 0) {
+        return currentConv.messages;
+      }
+      
+      return [];
     }
-    return [];
   };
 
   const setCurrentId = async (id) => {
