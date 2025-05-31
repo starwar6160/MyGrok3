@@ -72,21 +72,43 @@ export default function App() {
     try {
       const response = await fetch(`/api/conversations?type=${type}`);
       if (response.ok) {
-        const fetchedConversations = await response.json();
+        let fetchedConversations = await response.json();
+        
+        // Ensure each conversation has the required fields
+        fetchedConversations = fetchedConversations.map(conv => ({
+          ...conv,
+          name: conv.name || conv.title || '新会话', // Use name or title, default to '新会话'
+          messages: Array.isArray(conv.messages) ? conv.messages : []
+        }));
+
         setState(prevState => {
           let newCurrentId = prevState.currentId;
+          
           // If current conversation is not in the fetched list, default to the first one
           if (!fetchedConversations.find(c => c.id === newCurrentId) && fetchedConversations.length > 0) {
             newCurrentId = fetchedConversations[0].id;
           } else if (fetchedConversations.length === 0) {
             // If no conversations fetched, create a new one
-            const newConv = { id: uuidv4(), name: "新会话", messages: [] };
+            const newConv = { 
+              id: uuidv4(), 
+              name: "新会话", 
+              title: "新会话",
+              messages: [] 
+            };
             fetchedConversations.push(newConv);
             newCurrentId = newConv.id;
           }
-          localStorage.setItem("grok3_conversations", JSON.stringify(fetchedConversations));
-          localStorage.setItem("grok3_current_id", String(newCurrentId));
-          return { conversations: fetchedConversations, currentId: newCurrentId };
+          
+          // Only save to localStorage if we're not in history mode
+          if (type !== 'history') {
+            localStorage.setItem("grok3_conversations", JSON.stringify(fetchedConversations));
+            localStorage.setItem("grok3_current_id", String(newCurrentId));
+          }
+          
+          return { 
+            conversations: fetchedConversations, 
+            currentId: newCurrentId 
+          };
         });
       }
     } catch (e) {
@@ -125,13 +147,42 @@ export default function App() {
       currentId: prevState.currentId
     };
   });
-  const setCurrentId = (id) => setState(prevState => {
-    localStorage.setItem("grok3_current_id", String(id));
-    return {
-      conversations: prevState.conversations,
+  const loadMessages = async (conversationId) => {
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}/messages`);
+      if (response.ok) {
+        const messages = await response.json();
+        // Update the conversation with the loaded messages
+        setState(prevState => ({
+          ...prevState,
+          conversations: prevState.conversations.map(conv => 
+            conv.id === conversationId 
+              ? { ...conv, messages } 
+              : conv
+          )
+        }));
+        return messages;
+      }
+    } catch (error) {
+      console.error('Error loading messages:', error);
+    }
+    return [];
+  };
+
+  const setCurrentId = async (id) => {
+    // First update the current ID
+    setState(prevState => ({
+      ...prevState,
       currentId: id
-    };
-  });
+    }));
+    localStorage.setItem("grok3_current_id", String(id));
+    
+    // Check if we need to load messages for this conversation
+    const currentConv = conversations.find(c => c.id === id);
+    if (currentConv && (!currentConv.messages || currentConv.messages.length === 0)) {
+      await loadMessages(id);
+    }
+  };
 
   const currentConv = conversations.find(c => c.id === currentId);
 

@@ -130,29 +130,65 @@ def set_llm_cache(prompt_hash, response):
 
 @app.route('/api/conversations', methods=['GET'])
 def get_conversations():
-    conversation_ids = redis_client.lrange(CONVERSATIONS_KEY, 0, -1)
     conversations_list = []
+    
+    # First try to get conversations from the list
+    conversation_ids = redis_client.lrange(CONVERSATIONS_KEY, 0, -1)
+    
+    # If no conversations in the list, scan for all conversation hashes
+    if not conversation_ids:
+        print("No conversations in list, scanning for conversation hashes...")
+        # Get all conversation hashes
+        for key in redis_client.scan_iter("conversation:*"):
+            if key.startswith(b"conversation:") and b":" in key:
+                conv_id = key.split(b":", 1)[1].decode('utf-8')
+                conversation_ids.append(conv_id.encode('utf-8'))
+    
+    # Process each conversation
     for conv_id_bytes in conversation_ids:
-        conv_id = conv_id_bytes.decode('utf-8')
-        conv_data = redis_client.hgetall(f"conversation:{conv_id}")
-        if conv_data:
-            title = conv_data.get(b'title', b'').decode('utf-8')
-            created_at = conv_data.get(b'created_at', b'').decode('utf-8')
+        try:
+            conv_id = conv_id_bytes.decode('utf-8') if isinstance(conv_id_bytes, bytes) else conv_id_bytes
+            conv_data = redis_client.hgetall(f"conversation:{conv_id}")
+            
+            if not conv_data:
+                continue
+                
+            # Get conversation data
+            title = conv_data.get(b'title', b'').decode('utf-8') or "New Conversation"
+            created_at = conv_data.get(b'created_at', b'').decode('utf-8') or datetime.now().isoformat()
+            
             # Get the last message for the conversation
             messages = redis_client.lrange(f"messages:{conv_id}", -1, -1)
             last_message_content = ""
             if messages:
-                last_message = json.loads(messages[0].decode('utf-8'))
-                last_message_content = last_message.get('content', '')
-
+                try:
+                    last_message = json.loads(messages[0].decode('utf-8'))
+                    last_message_content = last_message.get('content', '')
+                except (json.JSONDecodeError, AttributeError) as e:
+                    print(f"Error decoding message for conversation {conv_id}: {e}")
+            
             conversations_list.append({
                 'id': conv_id,
+                'name': title,
                 'title': title,
                 'created_at': created_at,
-                'last_message': last_message_content
+                'last_message': last_message_content,
+                'messages': []  # Frontend expects this field
             })
+            
+        except Exception as e:
+            print(f"Error processing conversation {conv_id_bytes}: {e}")
+    
     # Sort by created_at in descending order
-    conversations_list.sort(key=lambda x: x['created_at'], reverse=True)
+    conversations_list.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    
+    # If we found conversations but they weren't in the list, update the list
+    if conversations_list and not conversation_ids:
+        print(f"Found {len(conversations_list)} conversations, updating conversations list...")
+        # Rebuild the conversations list
+        for conv in conversations_list:
+            redis_client.lpush(CONVERSATIONS_KEY, conv['id'])
+    
     return jsonify(conversations_list)
 
 @app.route('/api/conversations', methods=['POST'])
@@ -168,17 +204,63 @@ def create_conversation():
         'title': title,
         'created_at': created_at
     })
+    
     # Add conversation ID to a list for ordering
-    redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
-    return jsonify({'id': conversation_id, 'title': title, 'created_at': created_at}), 201
+    # First check if it's already in the list to avoid duplicates
+    if not redis_client.lpos(CONVERSATIONS_KEY, conversation_id):
+        redis_client.lpush(CONVERSATIONS_KEY, conversation_id)
+    
+    # Create an empty messages list if it doesn't exist
+    messages_key = f"messages:{conversation_id}"
+    if not redis_client.exists(messages_key):
+        redis_client.rpush(messages_key, '')  # Add empty message to create the list
+    
+    return jsonify({
+        'id': conversation_id, 
+        'name': title,  # Frontend expects 'name' instead of 'title'
+        'title': title,  # Keep for backward compatibility
+        'created_at': created_at,
+        'messages': []  # Include empty messages array
+    }), 201
 
 @app.route('/api/conversations/<conversation_id>', methods=['GET'])
-def get_conversation_messages(conversation_id):
-    messages_data = redis_client.lrange(f"messages:{conversation_id}", 0, -1)
-    messages_list = []
-    for msg_bytes in messages_data:
-        messages_list.append(json.loads(msg_bytes.decode('utf-8')))
-    return jsonify(messages_list)
+def get_conversation(conversation_id):
+    """Get conversation metadata"""
+    conv_data = redis_client.hgetall(f"conversation:{conversation_id}")
+    if not conv_data:
+        return jsonify({'error': 'Conversation not found'}), 404
+        
+    title = conv_data.get(b'title', b'').decode('utf-8')
+    created_at = conv_data.get(b'created_at', b'').decode('utf-8')
+    
+    return jsonify({
+        'id': conversation_id,
+        'name': title,
+        'title': title,
+        'created_at': created_at,
+        'messages': []
+    })
+
+@app.route('/api/conversations/<conversation_id>/messages', methods=['GET'])
+def get_conversation_messages_list(conversation_id):
+    """Get all messages for a specific conversation"""
+    messages = []
+    message_list = redis_client.lrange(f"messages:{conversation_id}", 0, -1)
+    
+    for msg_bytes in message_list:
+        try:
+            if msg_bytes:  # Skip empty messages
+                msg = json.loads(msg_bytes.decode('utf-8'))
+                messages.append({
+                    'id': msg.get('id', str(uuid.uuid4())),
+                    'role': msg.get('role', ''),
+                    'content': msg.get('content', ''),
+                    'timestamp': msg.get('timestamp', datetime.now().isoformat())
+                })
+        except json.JSONDecodeError as e:
+            print(f"Error decoding message {msg_bytes}: {e}")
+    
+    return jsonify(messages)
 
 @app.route('/api/conversations/<conversation_id>', methods=['DELETE'])
 def delete_conversation(conversation_id):
