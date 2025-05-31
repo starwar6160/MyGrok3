@@ -7,6 +7,12 @@ from pathlib import Path
 import sqlite3
 from datetime import datetime, timedelta
 import uuid
+import time
+
+# Define the data directory
+DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
+CONVERSATIONS_DIR = os.path.join(DATA_DIR, 'conversations')
+os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="frontend/build")
@@ -128,6 +134,13 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def save_conversation_to_file(conversation_id, messages):
+    """Saves the conversation messages to a text file."""
+    file_path = os.path.join(CONVERSATIONS_DIR, f"{conversation_id}.txt")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        for message in messages:
+            f.write(f"{message['role']}: {message['content']}\n")
+
 def init_db():
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -136,7 +149,8 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_file_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         cursor.execute('''
@@ -166,6 +180,12 @@ def update_conversation_timestamp(conversation_id):
         cursor = conn.cursor()
         cursor.execute("UPDATE conversations SET last_active = CURRENT_TIMESTAMP WHERE id = ?", (conversation_id,))
         conn.commit()
+
+def get_messages_for_conversation(conversation_id):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY timestamp", (conversation_id,))
+        return [dict(row) for row in cursor.fetchall()]
 
 def save_message(conversation_id, role, content):
     with get_db_connection() as conn:
@@ -254,22 +274,22 @@ def api_title_summary():
             conn.commit()
     return jsonify({"title": title or "新会话"})
 
-def get_conversations(active_hours=None, hidden_hours=None):
+def get_conversations(active_within_hours=None, older_than_hours=None):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         query = "SELECT id, title, created_at, last_active FROM conversations"
         conditions = []
         params = []
 
-        if active_hours is not None:
-            active_time_threshold = datetime.now() - timedelta(hours=active_hours)
+        if active_within_hours is not None:
+            active_time_threshold = datetime.now() - timedelta(hours=active_within_hours)
             conditions.append("last_active >= ?")
             params.append(active_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
 
-        if hidden_hours is not None:
-            hidden_time_threshold = datetime.now() - timedelta(hours=hidden_hours)
+        if older_than_hours is not None:
+            older_time_threshold = datetime.now() - timedelta(hours=older_than_hours)
             conditions.append("last_active < ?")
-            params.append(hidden_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
+            params.append(older_time_threshold.strftime('%Y-%m-%d %H:%M:%S'))
         
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -291,23 +311,19 @@ def get_messages_for_conversation(conversation_id):
 
 @app.route("/api/conversations", methods=["GET"])
 def api_conversations():
-    # For conversations with new Q&A in the last 12 hours, always auto-load
-    active_conversations = get_conversations(active_hours=12)
-    # For conversations without new Q&A in the last 24 hours, hide from web
-    hidden_conversations = get_conversations(hidden_hours=24)
+    conv_type = request.args.get('type', 'active') # 'active' or 'history'
 
-    # Combine and remove duplicates (a conversation might be in both if it's older than 12 but newer than 24)
-    # The requirement says "hidden from web" for >24h, so we filter those out.
-    # And "always auto-load" for <12h. So we return only those <24h.
-    all_conversations = get_conversations(hidden_hours=None) # Get all to filter in Python
-    filtered_conversations = []
-    hidden_ids = {conv['id'] for conv in hidden_conversations}
+    if conv_type == 'active':
+        # Return conversations active in the last 24 hours
+        conversations = get_conversations(active_within_hours=24)
+    elif conv_type == 'history':
+        # Return conversations older than 24 hours
+        conversations = get_conversations(older_than_hours=24)
+    else:
+        # Default to all if no type specified or invalid type
+        conversations = get_conversations()
 
-    for conv in all_conversations:
-        if conv['id'] not in hidden_ids:
-            filtered_conversations.append(conv)
-
-    return jsonify(filtered_conversations)
+    return jsonify(conversations)
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -348,7 +364,26 @@ def api_chat():
         save_message(conversation_id, "assistant", full_answer)
         update_conversation_timestamp(conversation_id)
 
+
+
     return Response(generate(), mimetype='text/plain')
+
+@app.route("/api/backup_db", methods=["POST"])
+def backup_database():
+    try:
+        backup_dir = os.path.join(DATA_DIR, 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"database_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.db")
+
+        source_conn = sqlite3.connect(DATABASE)
+        backup_conn = sqlite3.connect(backup_path)
+        with backup_conn:
+            source_conn.backup(backup_conn)
+        source_conn.close()
+        backup_conn.close()
+        return jsonify({"message": f"Database backed up successfully to {backup_path}"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to backup database: {str(e)}"}), 500
 
 import socket
 
@@ -360,3 +395,38 @@ def find_free_port(start_port=5000, max_tries=10):
                 return port
             port += 1
     raise RuntimeError("No free port found in range.")
+
+# Function to run in a background thread for periodic file updates
+def background_file_updater():
+    while True:
+        with app.app_context():
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                # Select conversations that haven't been updated in the last 5 minutes
+                # and whose last_active is more recent than last_file_update
+                cursor.execute("""
+                    SELECT id, last_active, last_file_update FROM conversations
+                    WHERE last_active < ? AND last_active > last_file_update
+                """, (datetime.now() - timedelta(minutes=5),))
+                conversations_to_update = cursor.fetchall()
+
+                for conv in conversations_to_update:
+                    conversation_id = conv['id']
+                    print(f"Updating file for conversation: {conversation_id}")
+                    all_messages = get_messages_for_conversation(conversation_id)
+                    save_conversation_to_file(conversation_id, all_messages)
+                    # Update last_file_update timestamp in DB
+                    cursor.execute("UPDATE conversations SET last_file_update = ? WHERE id = ?",
+                                   (datetime.now(), conversation_id))
+                conn.commit()
+        time.sleep(30) # Check every 30 seconds
+
+# Start the background thread when the application starts
+@app.before_first_request
+def start_background_updater():
+    thread = threading.Thread(target=background_file_updater)
+    thread.daemon = True # Allow the main program to exit even if the thread is running
+    thread.start()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

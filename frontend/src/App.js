@@ -11,67 +11,56 @@ const initialConversations = [
 ];
 
 async function getInitialState() {
-  let localConversations = initialConversations;
-  let currentId = initialConversations[0].id;
+  let conversations = [];
+  let currentId = null;
 
   try {
-    const saved = localStorage.getItem("grok3_conversations");
-    if (saved) {
-      localConversations = JSON.parse(saved);
-      if (!Array.isArray(localConversations) || !localConversations.length) {
-        localConversations = initialConversations;
-      }
-    }
-    const savedId = localStorage.getItem("grok3_current_id");
-    if (savedId && localConversations.find(c => c.id === savedId)) {
-      currentId = savedId;
-    } else {
-      currentId = localConversations[0].id;
-    }
-  } catch (e) {
-    console.error("Error loading from localStorage:", e);
-    localConversations = initialConversations;
-    currentId = initialConversations[0].id;
-  }
-
-  // Fetch from backend
-  try {
-    const response = await fetch('/api/conversations');
+    // Fetch active conversations from backend
+    const response = await fetch("/api/conversations?type=active");
     if (response.ok) {
-      const backendConversations = await response.json();
-      console.log("Backend conversations:", backendConversations);
-
-      // Merge backend and local conversations
-      // Prioritize backend data, and add any local-only conversations
-      const mergedConversationsMap = new Map();
-      backendConversations.forEach(conv => mergedConversationsMap.set(conv.id, conv));
-      localConversations.forEach(conv => {
-        if (!mergedConversationsMap.has(conv.id)) {
-          mergedConversationsMap.set(conv.id, conv);
-        }
-      });
-      const mergedConversations = Array.from(mergedConversationsMap.values());
-
-      if (mergedConversations.length > 0) {
-        // If currentId from local storage is not in merged, default to first backend conv
-        if (!mergedConversations.find(c => c.id === currentId)) {
-          currentId = mergedConversations[0].id;
-        }
-        return { conversations: mergedConversations, currentId };
+      conversations = await response.json();
+      if (conversations.length > 0) {
+        currentId = conversations[0].id;
       }
     }
   } catch (e) {
     console.error("Error fetching conversations from backend:", e);
     // Fallback to local storage if backend fetch fails
+    const saved = localStorage.getItem("grok3_conversations");
+    if (saved) {
+      conversations = JSON.parse(saved);
+      if (!Array.isArray(conversations) || !conversations.length) {
+        conversations = initialConversations;
+      }
+    } else {
+      conversations = initialConversations;
+    }
+    if (conversations.length > 0) {
+      currentId = conversations[0].id;
+    }
   }
 
-  return { conversations: localConversations, currentId };
+  // Try to restore currentId from localStorage if it exists and is valid
+  const savedId = localStorage.getItem("grok3_current_id");
+  if (savedId && conversations.find(c => c.id === savedId)) {
+    currentId = savedId;
+  } else if (conversations.length > 0) {
+    currentId = conversations[0].id;
+  } else {
+    // If no conversations, create a new one
+    const newConv = { id: uuidv4(), name: "新会话", messages: [] };
+    conversations.push(newConv);
+    currentId = newConv.id;
+  }
+
+  return { conversations, currentId };
 }
 
 export default function App() {
   // 新增状态
   const [lastFailedQuestion, setLastFailedQuestion] = useState("");
   const [showRetry, setShowRetry] = useState(false);
+  const [showHistory, setShowHistory] = useState(false); // New state for history
 
   const [selectedModel, setSelectedModel] = useState("grok-3-mini");
   const [{ conversations, currentId }, setState] = useState({
@@ -79,15 +68,38 @@ export default function App() {
     currentId: initialConversations[0].id,
   });
 
+  const loadConversations = async (type = 'active') => {
+    try {
+      const response = await fetch(`/api/conversations?type=${type}`);
+      if (response.ok) {
+        const fetchedConversations = await response.json();
+        setState(prevState => {
+          let newCurrentId = prevState.currentId;
+          // If current conversation is not in the fetched list, default to the first one
+          if (!fetchedConversations.find(c => c.id === newCurrentId) && fetchedConversations.length > 0) {
+            newCurrentId = fetchedConversations[0].id;
+          } else if (fetchedConversations.length === 0) {
+            // If no conversations fetched, create a new one
+            const newConv = { id: uuidv4(), name: "新会话", messages: [] };
+            fetchedConversations.push(newConv);
+            newCurrentId = newConv.id;
+          }
+          localStorage.setItem("grok3_conversations", JSON.stringify(fetchedConversations));
+          localStorage.setItem("grok3_current_id", String(newCurrentId));
+          return { conversations: fetchedConversations, currentId: newCurrentId };
+        });
+      }
+    } catch (e) {
+      console.error("Error loading conversations:", e);
+    }
+  };
+
   useEffect(() => {
-    const loadConversations = async () => {
-      const state = await getInitialState();
-      console.log('[INIT] state from localStorage/backend:', state);
+    getInitialState().then(state => {
       setState(state);
       localStorage.setItem("grok3_conversations", JSON.stringify(state.conversations));
       localStorage.setItem("grok3_current_id", String(state.currentId));
-    };
-    loadConversations();
+    });
   }, []);
 
   const [showDelete, setShowDelete] = useState(false);
@@ -317,6 +329,9 @@ export default function App() {
         currentId={currentId}
         setCurrentId={setCurrentId}
         addConversation={addConversation}
+        showHistory={showHistory}
+        setShowHistory={setShowHistory}
+        loadConversations={loadConversations}
       />
       <div className="main">
         {/* 删除按钮置顶，仅在有会话时显示 */}
