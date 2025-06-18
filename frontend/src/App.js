@@ -38,7 +38,8 @@ export default function App() {
   const [lastFailedQuestion, setLastFailedQuestion] = useState("");
   const [showRetry, setShowRetry] = useState(false);
 
-  const [selectedModel, setSelectedModel] = useState("grok-3-mini");
+  const [models, setModels] = useState(window.appConfig.models || []);
+  const [selectedModel, setSelectedModel] = useState(window.appConfig.selectedModel || models[0]);
   const [{ conversations, currentId }, setState] = useState(() => {
   const state = getInitialState();
   console.log('[INIT] state from localStorage:', state);
@@ -96,7 +97,7 @@ export default function App() {
 
   // 新建会话
   const addConversation = () => {
-    setSelectedModel("grok-3-mini"); // Reset model to default for new conversation
+    setSelectedModel(models[0]); // Reset model to default for new conversation
     const newId = Date.now();
     setConversationsAndCurrentId(
       [...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }],
@@ -268,6 +269,7 @@ export default function App() {
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
           onRetry={showRetry ? handleRetry : undefined}
+          models={models}
         />
       </div>
       {showDelete && (

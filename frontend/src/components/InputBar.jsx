@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange, onRetry }) {
+export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onModelChange, onRetry, models }) {
   const [text, setText] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef();
@@ -54,8 +54,9 @@ export default function InputBar({ onSend, onCopy, onDelete, selectedModel, onMo
           </div>
           <div className="right-buttons">
             <select value={selectedModel} onChange={e => onModelChange(e.target.value)} style={{ marginLeft: 12 }}>
-              <option value="grok-3-mini">grok-3-mini</option>
-              <option value="grok-3">grok-3</option>
+              {models.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
             </select>
             <button onClick={onCopy} title="复制会话">复制</button>
             <button onClick={handleSend} title="发送">发送</button>

@@ -15,17 +15,24 @@ try:
 except ImportError:
     pass  # 如果没装CORS，先不报错
 
-# Configure the xAI API client
-api_key = os.getenv("XAI_API_KEY")
-if not api_key:
-    raise ValueError("XAI_API_KEY environment variable not set")
+# Configure the OpenRouter API client
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+if not openrouter_api_key:
+    raise ValueError("OPENROUTER_API_KEY environment variable not set")
 
 client = openai.OpenAI(
-    base_url="https://api.x.ai/v1",
-    api_key=api_key
+    base_url="https://openrouter.ai/api/v1",
+    api_key=openrouter_api_key
 )
 
 DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
+
+MODELS = [
+    "google/gemini-flash-1.5",
+    "qwen/qwen3-14b",
+    "openai/gpt-4o-mini",
+    "x-ai/grok-3-mini-beta"
+]
 
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
@@ -112,28 +119,18 @@ def ask_grok(model, messages):
 
 
 
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_react(path):
-    build_dir = Path(app.static_folder)
-    file_path = build_dir / path
-    if path != "" and file_path.exists():
-        return send_from_directory(build_dir, path)
-    else:
-        return send_from_directory(build_dir, "index.html")
-
 @app.route("/", methods=["GET", "POST"])
 def index():
     answer = None
     error = None
     question = ""
-    selected_model = "grok-3-mini"  # Default model
+    selected_model = "google/gemini-flash-1.5"  # Default model
 
     # 流式API: POST JSON，支持上下文和缓存
     if request.method == "POST" and request.content_type and request.content_type.startswith("application/json"):
         data = request.get_json()
         question = data.get("question", "").strip()
-        selected_model = data.get("model", "grok-3-mini")
+        selected_model = data.get("model", "google/gemini-flash-1.5")
         history = data.get("history", [])  # 前端需传递历史消息（[{role, content}]）
         conversation_id = data.get("conversation_id") or "default"
         if not question:
@@ -158,7 +155,7 @@ def index():
     # 普通表单POST（无历史，仅单轮）
     if request.method == "POST":
         question = request.form.get("question", "").strip()
-        selected_model = request.form.get("model", "grok-3-mini")
+        selected_model = request.form.get("model", "google/gemini-flash-1.5")
         if not question:
             error = "Please enter a question."
         else:
@@ -171,6 +168,7 @@ def index():
         answer=answer,
         error=error,
         question=question,
+        models=MODELS,
         selected_model=selected_model
     )
 
@@ -184,7 +182,7 @@ def api_title_summary():
         "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
         + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
     )
-    title = ask_grok("grok-3-mini", [{"role": "user", "content": prompt}])
+    title = ask_grok("google/gemini-flash-1.5", [{"role": "user", "content": prompt}])
     # 只取前10字，去除空白
     title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
     if DEBUG_MESSAGES:
@@ -197,7 +195,7 @@ def api_chat():
         print('[FLASK] /api/chat received:', request.get_json())
     data = request.get_json()
     question = data.get("question", "").strip()
-    selected_model = data.get("model", "grok-3-mini")
+    selected_model = data.get("model", "google/gemini-flash-1.5")
     history = data.get("history", [])
     conversation_id = data.get("conversation_id") or "default"
     if not question:
@@ -224,6 +222,14 @@ def api_chat():
         
     return Response(generate(), mimetype='text/plain')
 
+@app.route('/<path:path>')
+def serve_react_app(path):
+    if path != "" and (Path(app.static_folder) / path).exists():
+        return send_from_directory(app.static_folder, path)
+    return send_from_directory(app.static_folder, 'index.html')
+
+
+
 import socket
 
 def find_free_port(start_port=5000, max_tries=10):
@@ -234,4 +240,3 @@ def find_free_port(start_port=5000, max_tries=10):
                 return port
             port += 1
     raise RuntimeError("No free port found in range.")
-
