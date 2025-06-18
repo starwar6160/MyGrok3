@@ -181,6 +181,9 @@ html, body, #root, .app-root {
 }
 
 @media (max-width: 600px) {
+  html, body {
+    font-size: 18pt;
+  }
   .app-root {
     flex-direction: column;
     height: auto;
