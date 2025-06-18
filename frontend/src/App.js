@@ -15,8 +15,33 @@ function getInitialState() {
   try {
     const saved = localStorage.getItem("grok3_conversations");
     if (saved) {
-      conversations = JSON.parse(saved);
-      if (!Array.isArray(conversations) || !conversations.length) {
+      let loadedConversations = JSON.parse(saved);
+      if (Array.isArray(loadedConversations) && loadedConversations.length) {
+        const now = Date.now();
+        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000); // 24 hours in milliseconds
+
+        conversations = loadedConversations.filter(conv => {
+          // Keep conversations that have 3 or more messages
+          if (conv.messages && conv.messages.length >= 3) {
+            return true;
+          }
+          // Keep conversations that are less than 24 hours old (based on conversation ID)
+          // If conv.id is not a timestamp, this might need adjustment
+          if (conv.id && conv.id > twentyFourHoursAgo) {
+            return true;
+          }
+          // Delete conversations with less than 3 messages AND older than 24 hours
+          return false;
+        });
+
+        // If all conversations are filtered out, revert to initial state
+        if (!conversations.length) {
+          conversations = initialConversations;
+        } else {
+          // If conversations were deleted, update localStorage immediately
+          localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
+        }
+      } else {
         conversations = initialConversations;
       }
     }
