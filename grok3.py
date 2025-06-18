@@ -25,6 +25,8 @@ client = openai.OpenAI(
     api_key=api_key
 )
 
+DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
+
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
 
@@ -88,18 +90,23 @@ def ask_grok_stream(model, messages):
 # 兼容非流式（表单POST）
 def ask_grok(model, messages):
     try:
-        print(f"[ask_grok] model={model!r}, messages={messages!r}")
+        if DEBUG_MESSAGES:
+            print(f"[ask_grok] model={model!r}, messages={messages!r}")
         response = client.chat.completions.create(
             model=model,
             messages=messages
         )
-        print(f"[ask_grok] response={response}")
+        if DEBUG_MESSAGES:
+            print(f"[ask_grok] response content length={len(response.choices[0].message.content)}")
+        print(f"[ask_grok] token usage: {response.usage}")
         return response.choices[0].message.content
     except openai.NotFoundError as e:
-        print(f"[ask_grok] NotFoundError: {e}")
+        if DEBUG_MESSAGES:
+            print(f"[ask_grok] NotFoundError: {e}")
         return f"API Error: {e}"
     except Exception as e:
-        print(f"[ask_grok] Exception: {e}")
+        if DEBUG_MESSAGES:
+            print(f"[ask_grok] Exception: {e}")
         return f"Unexpected Error: {e}"
 
 
@@ -143,6 +150,8 @@ def index():
                 assistant_content += chunk
                 yield chunk
             # --- 保存AI回复 ---
+            if DEBUG_MESSAGES:
+                print(f"[api_chat] streamed response content length={len(assistant_content)}")
             
         return Response(stream_with_context(stream_gen()), mimetype='text/plain')
 
@@ -155,7 +164,8 @@ def index():
         else:
             messages = [{"role": "user", "content": question}]
             answer = get_llm_cached(selected_model, messages)
-    print('[FLASK] / index page response:', locals())
+    if DEBUG_MESSAGES:
+        print(f'[FLASK] / index page response: answer content length={len(answer) if answer else 0}')
     return render_template(
         "index.html",
         answer=answer,
@@ -167,7 +177,8 @@ def index():
 @app.route("/api/title_summary", methods=["POST"])
 def api_title_summary():
     data = request.get_json()
-    print('[FLASK] /api/title_summary received:', data)
+    if DEBUG_MESSAGES:
+        print('[FLASK] /api/title_summary received:', data)
     messages = data.get("messages", [])
     prompt = (
         "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
@@ -176,12 +187,14 @@ def api_title_summary():
     title = ask_grok("grok-3-mini", [{"role": "user", "content": prompt}])
     # 只取前10字，去除空白
     title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
-    print('[FLASK] /api/title_summary response:', title)
+    if DEBUG_MESSAGES:
+        print('[FLASK] /api/title_summary response:', title)
     return jsonify({"title": title or "新会话"})
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    print('[FLASK] /api/chat received:', request.get_json())
+    if DEBUG_MESSAGES:
+        print('[FLASK] /api/chat received:', request.get_json())
     data = request.get_json()
     question = data.get("question", "").strip()
     selected_model = data.get("model", "grok-3-mini")
@@ -195,9 +208,10 @@ def api_chat():
     # 保存用户消息
     import time
     
-    print(f"[api_chat] question={question!r}")
-    print(f"[api_chat] model={selected_model!r}")
-    print(f"[api_chat] history={history!r}")
+    if DEBUG_MESSAGES:
+        print(f"[api_chat] question={question!r}")
+        print(f"[api_chat] model={selected_model!r}")
+        print(f"[api_chat] history={history!r}")
     def generate():
         import types
         answer_chunks = get_llm_cached(selected_model, messages, stream=True)
