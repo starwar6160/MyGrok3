@@ -16,19 +16,19 @@ except ImportError:
     pass  # 如果没装CORS，先不报错
 
 # Configure the OpenRouter API client
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-if not openrouter_api_key:
-    raise ValueError("OPENROUTER_API_KEY environment variable not set")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY environment variable not set")
 
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=openrouter_api_key
+    api_key=openai_api_key
 )
 
 DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
 MODELS = [
-    "google/gemini-flash-1.5",
+    "google/gemini-2.5-flash-lite-preview-06-17",
     "qwen/qwen3-14b",
     "openai/gpt-4o-mini",
     "x-ai/grok-3-mini-beta"
