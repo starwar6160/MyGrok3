@@ -27,11 +27,20 @@ client = openai.OpenAI(
 
 DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
-MODELS = [
-    "google/gemini-2.5-flash-lite-preview-06-17",
-    "qwen/qwen3-14b",
+MODELS = [    
+    "deepseek/deepseek-chat-v3-0324:free",
+    "tngtech/deepseek-r1t-chimera:free",    
+    "deepseek/deepseek-r1-0528:free",
+    "deepseek/deepseek-r1-distill-llama-70b:free",
+    "qwen/qwen3-14b:free",
+    "google/gemma-3-12b-it:free",
+    "meta-llama/llama-4-maverick-17b-128e-instruct:free",
+    "mistralai/devstral-small:free",
+    "minimax/minimax-m1",
+    "x-ai/grok-3-mini-beta",
     "openai/gpt-4o-mini",
-    "x-ai/grok-3-mini-beta"
+    "anthropic/claude-3-5-haiku",
+    "google/gemini-2.5-flash-lite-preview-06-17",
 ]
 
 # 简单 LLM cache（可换成 Redis 等）
