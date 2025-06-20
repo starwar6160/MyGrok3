@@ -28,14 +28,21 @@ client = openai.OpenAI(
 
 DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
-MODELS = [    
+
+
+
+#USE_STABLE_MODELS=false FLASK_APP=grok3.py flask run -p 5003 -h 0.0.0.0
+# Flag to switch between experimental and stable model lists
+USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
+
+MODELS_EXPERIMENTAL = [
+    "meta-llama/llama-4-maverick-17b-128e-instruct:free",
     "deepseek/deepseek-chat-v3-0324:free",
-    "tngtech/deepseek-r1t-chimera:free",    
+    "tngtech/deepseek-r1t-chimera:free",
     "deepseek/deepseek-r1-0528:free",
     "deepseek/deepseek-r1-distill-llama-70b:free",
     "qwen/qwen3-14b:free",
-    "google/gemma-3-12b-it:free",
-    "meta-llama/llama-4-maverick-17b-128e-instruct:free",
+    "google/gemma-3-12b-it:free",    
     "mistralai/devstral-small:free",
     "minimax/minimax-m1",
     "x-ai/grok-3-mini-beta",
@@ -43,6 +50,15 @@ MODELS = [
     "anthropic/claude-3-5-haiku",
     "google/gemini-2.5-flash-lite-preview-06-17",
 ]
+
+MODELS_STABLE = [
+    "x-ai/grok-3-mini-beta",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-3-5-haiku",
+    "google/gemini-2.5-flash-lite-preview-06-17",
+]
+
+MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
 
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
