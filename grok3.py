@@ -220,14 +220,37 @@ def api_chat():
         print(f"[api_chat] model={selected_model!r}")
         print(f"[api_chat] history={history!r}")
     def generate():
-        import types
-        answer_chunks = get_llm_cached(selected_model, messages, stream=True)
-        import sys
         full_answer = ''
-        for chunk in answer_chunks:
-            full_answer += chunk
-            yield chunk
-        # 保存AI回复（只保存一次完整内容）
+        model_name = selected_model # Capture the model name
+        total_tokens = 0
+
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                stream=True
+            )
+            for chunk in response:
+                if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_answer += content
+                    yield content
+                
+                # Check for usage at the end of the stream
+                if chunk.choices[0].finish_reason == "stop":
+                    # The usage object is usually available in the last chunk
+                    if hasattr(chunk.usage, 'total_tokens'):
+                        total_tokens = chunk.usage.total_tokens
+                        if DEBUG_MESSAGES:
+                            print(f"[api_chat] Total tokens used: {total_tokens}")
+            
+            # Append model name and token count to the end of the response
+            yield f"\n\n(Model: {model_name}, Tokens: {total_tokens})\n"
+
+        except openai.NotFoundError as e:
+            yield f"API Error: {e}"
+        except Exception as e:
+            yield f"Unexpected Error: {e}"
         
     return Response(generate(), mimetype='text/plain')
 
