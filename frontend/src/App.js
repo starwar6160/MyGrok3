@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
 import InputBar from "./components/InputBar";
@@ -6,7 +6,7 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import "./index.css";
 
 const initialConversations = [
-  { id: 1, name: "会话1", messages: [] }
+  { id: 1, name: "会话1", messages: [], selectedModel: "google/gemini-flash-1.5" }
 ];
 
 function getInitialState() {
@@ -37,14 +37,12 @@ function getInitialState() {
         // If all conversations are filtered out, revert to initial state
         if (!conversations.length) {
           conversations = initialConversations;
-        } else {
-          // If conversations were deleted, update localStorage immediately
-          localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
         }
-      } else {
-        conversations = initialConversations;
       }
     }
+    // Ensure all loaded conversations have a selectedModel
+    conversations = conversations.map(conv => ({ ...conv, selectedModel: conv.selectedModel || "google/gemini-flash-1.5" }));
+
     const savedId = localStorage.getItem("grok3_current_id");
     if (savedId && conversations.find(c => c.id === Number(savedId))) {
       currentId = Number(savedId);
@@ -52,7 +50,7 @@ function getInitialState() {
       currentId = conversations[0].id;
     }
   } catch {
-    conversations = initialConversations;
+    conversations = initialConversations.map(conv => ({ ...conv, selectedModel: conv.selectedModel || "google/gemini-flash-1.5" }));
     currentId = initialConversations[0].id;
   }
   return { conversations, currentId };
@@ -63,13 +61,25 @@ export default function App() {
   const [lastFailedQuestion, setLastFailedQuestion] = useState("");
   const [showRetry, setShowRetry] = useState(false);
 
-  const [models, setModels] = useState(window.appConfig.models || []);
-  const [selectedModel, setSelectedModel] = useState(window.appConfig.selectedModel || models[0]);
+  const [models, setModels] = useState((window.appConfig && window.appConfig.models) || [
+    "google/gemini-flash-1.5",
+    "x-ai/grok-3-mini-beta",
+    "anthropic/claude-3-haiku",
+    // Add other default models here if needed
+  ]);
+  const [selectedModel, setSelectedModel] = useState((window.appConfig && window.appConfig.selectedModel) || models[0]);
   const [{ conversations, currentId }, setState] = useState(() => {
-  const state = getInitialState();
-  console.log('[INIT] state from localStorage:', state);
-  return state;
-});
+    const state = getInitialState();
+    console.log('[INIT] state from localStorage:', state);
+    return state;
+  });
+  // Update selectedModel when currentId changes
+  useEffect(() => {
+    const conv = conversations.find(c => c.id === currentId);
+    if (conv && conv.selectedModel) {
+      setSelectedModel(conv.selectedModel);
+    }
+  }, [currentId, conversations]);
   const [showDelete, setShowDelete] = useState(false);
 
   // 保证 conversations 和 currentId 同步更新
@@ -92,13 +102,20 @@ export default function App() {
       currentId: state.currentId
     };
   });
-  const setCurrentId = (id) => setState(state => {
-    localStorage.setItem("grok3_current_id", String(id));
-    return {
-      conversations: state.conversations,
-      currentId: id
-    };
-  });
+  const setCurrentId = (id) => {
+    setState(state => {
+      localStorage.setItem("grok3_current_id", String(id));
+      return {
+        conversations: state.conversations,
+        currentId: id
+      };
+    });
+    // Also update the selected model when the conversation changes
+    const conv = conversations.find(c => c.id === id);
+    if (conv && conv.selectedModel) {
+      setSelectedModel(conv.selectedModel);
+    }
+  };
 
   const currentConv = conversations.find(c => c.id === currentId);
 
@@ -122,12 +139,12 @@ export default function App() {
 
   // 新建会话
   const addConversation = () => {
-    setSelectedModel(models[0]); // Reset model to default for new conversation
-    const newId = Date.now();
-    setConversationsAndCurrentId(
-      [...conversations, { id: newId, name: `会话${conversations.length+1}`, messages: [] }],
-      newId
-    );
+    const newId = Date.now(); // 使用时间戳作为唯一ID
+    // Use the first model in the current models list as the default
+    const defaultModel = models[0];
+    const newConv = { id: newId, name: `新会话${conversations.length + 1}`, messages: [], selectedModel: defaultModel };
+    setConversationsAndCurrentId(prev => [...prev, newConv], newId);
+    setSelectedModel(defaultModel); // Set the newly added conversation's model as the current selected model
   };
 
 
@@ -207,7 +224,7 @@ export default function App() {
                 break;
               }
             }
-            return { ...c, messages: msgs };
+            return { ...c, messages: msgs, selectedModel: selectedModel };
           })
         );
       }

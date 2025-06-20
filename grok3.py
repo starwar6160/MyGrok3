@@ -52,10 +52,11 @@ MODELS_EXPERIMENTAL = [
 ]
 
 MODELS_STABLE = [
+    "tngtech/deepseek-r1t-chimera:free",
+    "google/gemini-2.5-flash-lite-preview-06-17",
     "x-ai/grok-3-mini-beta",
     "openai/gpt-4o-mini",
-    "anthropic/claude-3-5-haiku",
-    "google/gemini-2.5-flash-lite-preview-06-17",
+    "anthropic/claude-3-5-haiku",    
 ]
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
@@ -145,58 +146,42 @@ def ask_grok(model, messages):
 
 
 
-@app.route("/", methods=["GET", "POST"])
+def serve_index_with_config():
+    try:
+        index_path = Path(app.static_folder) / 'index.html'
+        with open(index_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+
+        # Prepare appConfig script
+        # Ensure MODELS is JSON serializable (it should be a list of strings)
+        models_json = json.dumps(MODELS)
+        selected_model_json = json.dumps(MODELS[0]) # Default model for initial load
+
+        app_config_script = f'''<script>
+          window.appConfig = {{
+            models: {models_json},
+            selectedModel: {selected_model_json}
+          }};
+        </script>'''
+
+        # Inject script before closing body tag or head tag
+        if '</body>' in html_content:
+            html_content = html_content.replace('</body>', app_config_script + '</body>')
+        elif '</head>' in html_content: # Fallback if no body tag (less likely for full HTML page)
+            html_content = html_content.replace('</head>', app_config_script + '</head>')
+        else: # Fallback: append to the end
+            html_content += app_config_script
+
+        return Response(html_content, mimetype='text/html')
+    except FileNotFoundError:
+        return "index.html not found in static folder", 404
+    except Exception as e:
+        print(f"Error serving index with config: {e}")
+        return "Internal server error", 500
+
+@app.route("/", methods=["GET"])
 def index():
-    answer = None
-    error = None
-    question = ""
-    selected_model = "google/gemini-flash-1.5"  # Default model
-
-    # 流式API: POST JSON，支持上下文和缓存
-    if request.method == "POST" and request.content_type and request.content_type.startswith("application/json"):
-        data = request.get_json()
-        question = data.get("question", "").strip()
-        selected_model = data.get("model", "google/gemini-flash-1.5")
-        history = data.get("history", [])  # 前端需传递历史消息（[{role, content}]）
-        conversation_id = data.get("conversation_id") or "default"
-        if not question:
-            return Response("Please enter a question.", mimetype="text/plain"), 400
-        # 拼接历史+当前
-        history.append({"role": "user", "content": question})
-        messages = summarize_history(history, max_chars=2000)
-        # --- 保存用户消息 ---
-        import time
-        
-        def stream_gen():
-            assistant_content = ""
-            for chunk in get_llm_cached(selected_model, messages, stream=True):
-                assistant_content += chunk
-                yield chunk
-            # --- 保存AI回复 ---
-            if DEBUG_MESSAGES:
-                print(f"[api_chat] streamed response content length={len(assistant_content)}")
-            
-        return Response(stream_with_context(stream_gen()), mimetype='text/plain')
-
-    # 普通表单POST（无历史，仅单轮）
-    if request.method == "POST":
-        question = request.form.get("question", "").strip()
-        selected_model = request.form.get("model", "google/gemini-flash-1.5")
-        if not question:
-            error = "Please enter a question."
-        else:
-            messages = [{"role": "user", "content": question}]
-            answer = get_llm_cached(selected_model, messages)
-    if DEBUG_MESSAGES:
-        print(f'[FLASK] / index page response: answer content length={len(answer) if answer else 0}')
-    return render_template(
-        "index.html",
-        answer=answer,
-        error=error,
-        question=question,
-        models=MODELS,
-        selected_model=selected_model
-    )
+    return serve_index_with_config()
 
 @app.route("/api/title_summary", methods=["POST"])
 def api_title_summary():
@@ -282,9 +267,12 @@ def api_chat():
 
 @app.route('/<path:path>')
 def serve_react_app(path):
-    if path != "" and (Path(app.static_folder) / path).exists():
+    # Serve static files directly if they exist
+    static_file_path = Path(app.static_folder) / path
+    if static_file_path.exists() and static_file_path.is_file():
         return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
+    # For any other path (including client-side routes or explicit index.html), serve the main app shell
+    return serve_index_with_config()
 
 
 
