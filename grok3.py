@@ -2,6 +2,7 @@ import openai
 import os
 import hashlib
 import json
+import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
 
@@ -236,15 +237,24 @@ def api_chat():
                     full_answer += content
                     yield content
                 
-                # Check for usage at the end of the stream
-                if chunk.choices[0].finish_reason == "stop":
-                    # The usage object is usually available in the last chunk
-                    if hasattr(chunk.usage, 'total_tokens'):
-                        total_tokens = chunk.usage.total_tokens
-                        if DEBUG_MESSAGES:
-                            print(f"[api_chat] Total tokens used: {total_tokens}")
-            
-            # Append model name and token count to the end of the response
+            # Manual token counting using tiktoken
+            import tiktoken
+
+            try:
+                encoding = tiktoken.encoding_for_model(model_name)
+            except KeyError:
+                encoding = tiktoken.get_encoding("cl100k_base") # Fallback for unknown models
+
+            # Calculate input tokens
+            input_tokens = 0
+            for message in messages:
+                input_tokens += len(encoding.encode(message.get('content', '')))
+                input_tokens += 4 # Every message follows <im_start>{role/name}\n{content}<im_end>\n
+            input_tokens += 2 # Every reply starts with <im_start>assistant\n
+            # Calculate output tokens
+            output_tokens = len(encoding.encode(full_answer))
+            total_tokens = input_tokens + output_tokens
+
             yield f"\n\n(Model: {model_name}, Tokens: {total_tokens})\n"
 
         except openai.NotFoundError as e:
