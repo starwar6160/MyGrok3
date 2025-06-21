@@ -36,29 +36,31 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 MODELS_EXPERIMENTAL = [
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40
+    #便宜，而且能正确回答9.9和9.11哪一个大的模型：
+    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40    
     "qwen/qwen3-14b",   #6/24
+    "moonshotai/kimi-dev-72b:free",   
+    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
+    #便宜，但比前面的贵的经济型模型
+    "openai/gpt-4o-mini",#15/60    
+    "x-ai/grok-3-mini",#30/50
+    "thedrummer/unslopnemo-12b",#45/45    
+    "deepseek/deepseek-r1-0528:free",    #55/219    
+    "minimax/minimax-m1",#30/165
+    #便宜，但是无法正确回答9.9和9.11哪一个大的模型：
     "google/gemma-3-12b-it",    #5/10
     "mistralai/devstral-small",#6/12
-    "meta-llama/llama-4-maverick-17b-128e-instruct",#15/60
-    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
-    "x-ai/grok-3-mini",#30/50
-    "openai/gpt-4o-mini",#15/60    
-    "thedrummer/unslopnemo-12b",#45/45
-    "minimax/minimax-m1",#30/165
-    "deepseek/deepseek-r1-0528",    #55/219
-    "deepseek/deepseek-chat-v3-0324",#27/110    
-    "anthropic/claude-3-5-haiku",#80/400
+
 ]
 #"tngtech/deepseek-r1t-chimera:free",
-
+#    "deepseek/deepseek-chat-v3-0324",#27/110    
 
 MODELS_STABLE = [
     "google/gemini-2.5-flash-lite-preview-06-17",
-    "deepseek/deepseek-chat-v3-0324",   
-    "x-ai/grok-3-mini-beta",
     "openai/gpt-4o-mini",
-    "anthropic/claude-3-5-haiku",    
+    "x-ai/grok-3-mini",    
+    "deepseek/deepseek-r1-distill-llama-70b:free",
+    "thedrummer/unslopnemo-12b",#45/45    
 ]
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
