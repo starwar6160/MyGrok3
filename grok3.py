@@ -79,6 +79,46 @@ openrouter_models_cache = {
     'price_dict': {},    # {model_name: {'input': float, 'output': float}}
 }
 
+OPENROUTER_PRICE_CACHE_PATH = 'openrouter_model_prices.json'
+
+# 保存当天价格到json文件
+def save_openrouter_price_cache():
+    from datetime import datetime
+    data = {
+        'date': datetime.now().strftime('%Y-%m-%d'),
+        'models': openrouter_models_cache['models'],
+        'price_dict': openrouter_models_cache['price_dict']
+    }
+    try:
+        with open(OPENROUTER_PRICE_CACHE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        if DEBUG_MESSAGES:
+            print(f'[OpenRouter] Failed to save price cache: {e}')
+
+# 加载当天价格json文件
+def load_openrouter_price_cache():
+    from datetime import datetime
+    import os
+    if not os.path.exists(OPENROUTER_PRICE_CACHE_PATH):
+        return False
+    try:
+        with open(OPENROUTER_PRICE_CACHE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        today = datetime.now().strftime('%Y-%m-%d')
+        if data.get('date') == today:
+            openrouter_models_cache['models'] = data.get('models', [])
+            openrouter_models_cache['price_dict'] = data.get('price_dict', {})
+            openrouter_models_cache['last_fetch'] = datetime.now()
+            if DEBUG_MESSAGES:
+                print('[OpenRouter] Loaded today price cache from file')
+            return True
+    except Exception as e:
+        if DEBUG_MESSAGES:
+            print(f'[OpenRouter] Failed to load price cache: {e}')
+    return False
+
+
 OPENROUTER_MODELS_API = "https://openrouter.ai/api/v1/models"
 
 # 拉取OpenRouter模型列表及价格
@@ -107,6 +147,7 @@ def fetch_openrouter_models():
             openrouter_models_cache['price_dict'] = price_dict
             if DEBUG_MESSAGES:
                 print('[OpenRouter] Model pricing updated:', price_dict)
+            save_openrouter_price_cache()
         else:
             if DEBUG_MESSAGES:
                 print(f'[OpenRouter] Failed to fetch models: {resp.status_code}')
@@ -128,6 +169,11 @@ def ensure_openrouter_models():
     # 若超24小时未拉取则强制拉取
     now = datetime.now()
     last = openrouter_models_cache.get('last_fetch')
+    # 优先尝试加载当天缓存
+    if not openrouter_models_cache['models'] or not openrouter_models_cache['price_dict']:
+        loaded = load_openrouter_price_cache()
+        if loaded:
+            last = openrouter_models_cache.get('last_fetch')
     if not last or (now - last > timedelta(hours=24)):
         fetch_openrouter_models()
     if not getattr(ensure_openrouter_models, '_started', False):
@@ -356,7 +402,7 @@ def api_chat():
             estimated_cost = estimate_cost(model_name, input_tokens, output_tokens)
             output_cost_per_1m = get_1m_output_cost(model_name)
             warning_msg = ''
-            warning_threshold = 0.01  # 单次请求警告阈值（美元）
+            warning_threshold = 0.0000001  # 单次请求警告阈值（美元）
             output_1m_threshold = 0.3  # 1M输出token高价阈值
             if estimated_cost > warning_threshold or output_cost_per_1m >= output_1m_threshold:
                 cheaper = suggest_cheaper_models(model_name, output_1m_threshold)
