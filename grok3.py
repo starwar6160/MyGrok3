@@ -30,30 +30,32 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
 
 
-
+#screen -D -r 2304929
 #USE_STABLE_MODELS=false FLASK_APP=grok3.py flask run -p 5003 -h 0.0.0.0
 # Flag to switch between experimental and stable model lists
 USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 MODELS_EXPERIMENTAL = [
-    "meta-llama/llama-4-maverick-17b-128e-instruct:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "tngtech/deepseek-r1t-chimera:free",
-    "deepseek/deepseek-r1-0528:free",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
-    "qwen/qwen3-14b:free",
-    "google/gemma-3-12b-it:free",    
-    "mistralai/devstral-small:free",
-    "minimax/minimax-m1",
-    "x-ai/grok-3-mini-beta",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-3-5-haiku",
-    "google/gemini-2.5-flash-lite-preview-06-17",
+    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40
+    "qwen/qwen3-14b",   #6/24
+    "google/gemma-3-12b-it",    #5/10
+    "mistralai/devstral-small",#6/12
+    "meta-llama/llama-4-maverick-17b-128e-instruct",#15/60
+    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
+    "x-ai/grok-3-mini",#30/50
+    "openai/gpt-4o-mini",#15/60    
+    "thedrummer/unslopnemo-12b",#45/45
+    "minimax/minimax-m1",#30/165
+    "deepseek/deepseek-r1-0528",    #55/219
+    "deepseek/deepseek-chat-v3-0324",#27/110    
+    "anthropic/claude-3-5-haiku",#80/400
 ]
+#"tngtech/deepseek-r1t-chimera:free",
+
 
 MODELS_STABLE = [
-    "tngtech/deepseek-r1t-chimera:free",
     "google/gemini-2.5-flash-lite-preview-06-17",
+    "deepseek/deepseek-chat-v3-0324",   
     "x-ai/grok-3-mini-beta",
     "openai/gpt-4o-mini",
     "anthropic/claude-3-5-haiku",    
@@ -63,6 +65,98 @@ MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
 
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
+
+# === OpenRouter模型价格缓存与每日刷新 ===
+import threading
+import time
+from datetime import datetime, timedelta
+
+openrouter_models_cache = {
+    'models': [],  # 模型完整信息
+    'last_fetch': None,  # 上次拉取时间
+    'price_dict': {},    # {model_name: {'input': float, 'output': float}}
+}
+
+OPENROUTER_MODELS_API = "https://openrouter.ai/api/v1/models"
+
+# 拉取OpenRouter模型列表及价格
+def fetch_openrouter_models():
+    import requests
+    headers = {"Authorization": f"Bearer {openai_api_key}"}
+    try:
+        resp = requests.get(OPENROUTER_MODELS_API, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            openrouter_models_cache['models'] = data.get('data', [])
+            openrouter_models_cache['last_fetch'] = datetime.now()
+            price_dict = {}
+            for m in openrouter_models_cache['models']:
+                model_id = m.get('id')
+                pricing = m.get('pricing', {})
+                try:
+                    input_price = float(pricing.get('prompt', 0))
+                    output_price = float(pricing.get('completion', 0))
+                except Exception:
+                    input_price = output_price = 0
+                price_dict[model_id] = {
+                    'input': input_price,
+                    'output': output_price
+                }
+            openrouter_models_cache['price_dict'] = price_dict
+            if DEBUG_MESSAGES:
+                print('[OpenRouter] Model pricing updated:', price_dict)
+        else:
+            if DEBUG_MESSAGES:
+                print(f'[OpenRouter] Failed to fetch models: {resp.status_code}')
+    except Exception as e:
+        if DEBUG_MESSAGES:
+            print(f'[OpenRouter] Exception fetching models: {e}')
+
+# 定时每日自动刷新（守护线程）
+def start_openrouter_model_refresh():
+    def loop():
+        while True:
+            fetch_openrouter_models()
+            time.sleep(24 * 60 * 60)  # 每24小时拉取一次
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+# 启动时先拉取一次并启动定时线程
+def ensure_openrouter_models():
+    # 若超24小时未拉取则强制拉取
+    now = datetime.now()
+    last = openrouter_models_cache.get('last_fetch')
+    if not last or (now - last > timedelta(hours=24)):
+        fetch_openrouter_models()
+    if not getattr(ensure_openrouter_models, '_started', False):
+        start_openrouter_model_refresh()
+        ensure_openrouter_models._started = True
+
+# 计算请求成本
+def estimate_cost(model_name, input_tokens, output_tokens):
+    ensure_openrouter_models()
+    price_dict = openrouter_models_cache.get('price_dict', {})
+    price = price_dict.get(model_name)
+    if price:
+        return input_tokens * price['input'] + output_tokens * price['output']
+    return 0.0
+
+# 获取1M输出token的价格
+def get_1m_output_cost(model_name):
+    ensure_openrouter_models()
+    price_dict = openrouter_models_cache.get('price_dict', {})
+    price = price_dict.get(model_name)
+    if price:
+        return price['output'] * 1_000_000
+    return 0.0
+
+# 获取更便宜的模型建议
+def suggest_cheaper_models(current_model, max_output_cost=1.0):
+    ensure_openrouter_models()
+    price_dict = openrouter_models_cache.get('price_dict', {})
+    cheaper = [m for m, v in price_dict.items() if v['output'] * 1_000_000 < max_output_cost and m != current_model]
+    return cheaper[:2]  # 最多推荐2个
+
 
 def get_llm_cache_key(model, messages):
     # 用模型+消息内容哈希做key
@@ -256,7 +350,22 @@ def api_chat():
             output_tokens = len(encoding.encode(full_answer))
             total_tokens = input_tokens + output_tokens
 
-            yield f"\n\n(Model: {model_name}, Tokens: {total_tokens})\n"
+            # === 成本估算与高价警告 ===
+            estimated_cost = estimate_cost(model_name, input_tokens, output_tokens)
+            output_cost_per_1m = get_1m_output_cost(model_name)
+            warning_msg = ''
+            warning_threshold = 0.01  # 单次请求警告阈值（美元）
+            output_1m_threshold = 0.3  # 1M输出token高价阈值
+            if estimated_cost > warning_threshold or output_cost_per_1m >= output_1m_threshold:
+                cheaper = suggest_cheaper_models(model_name, output_1m_threshold)
+                cheaper_str = '、'.join(cheaper) if cheaper else ''
+                if output_cost_per_1m >= output_1m_threshold:
+                    warning_msg = f"\n\n成本提示：当前模型输出成本较高，1M token 约 {output_cost_per_1m:.2f} 美元。"
+                else:
+                    warning_msg = f"\n\n请注意：本次对话预计输出成本较高（约 {estimated_cost:.2f} 美元）。"
+                if cheaper_str:
+                    warning_msg += f" 如需节省成本，请考虑切换到 {cheaper_str}。"
+            yield f"\n\n(Model: {model_name}, Tokens: {total_tokens}){warning_msg}\n"
 
         except openai.NotFoundError as e:
             yield f"API Error: {e}"
