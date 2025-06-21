@@ -86,7 +86,23 @@ export default function ReplyBox({ content }) {
             );
           } else {
             // 正文分句渲染
-            const sentences = splitByPunctuation(part.text);
+            let text = part.text;
+            // 如果有多条累计成本，只保留最后一条
+            if (text.includes('本会话累计成本')) {
+              // 只保留最后一条累计成本提示
+              const lines = text.split(/\n+/);
+              let lastCostLine = '';
+              let otherLines = [];
+              for (let line of lines) {
+                if (line.includes('本会话累计成本')) {
+                  lastCostLine = line;
+                } else {
+                  otherLines.push(line);
+                }
+              }
+              text = [...otherLines.filter(l=>l.trim()), lastCostLine].filter(Boolean).join('\n');
+            }
+            const sentences = splitByPunctuation(text);
             return sentences.map((sent, j) => sent.trim() ? <span key={i+"-"+j} style={{display:'block',whiteSpace:'pre-wrap',marginBottom:4}}>{sent}</span> : null);
           }
         })}

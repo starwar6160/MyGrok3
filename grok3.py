@@ -57,6 +57,7 @@ MODELS_EXPERIMENTAL = [
 
 MODELS_STABLE = [
     "google/gemini-2.5-flash-lite-preview-06-17",
+    "qwen/qwen3-14b",   #6/24
     "openai/gpt-4o-mini",
     "x-ai/grok-3-mini",    
     "deepseek/deepseek-r1-distill-llama-70b:free",
@@ -377,12 +378,18 @@ def api_chat():
                 messages=messages,
                 stream=True
             )
+            last_content = None
             for chunk in response:
                 if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_answer += content
-                    yield content
-                
+                    if last_content is not None:
+                        yield last_content
+                    last_content = content
+            # 只yield最后一条统计和警告
+            if last_content is not None:
+                yield last_content
+            
             # Manual token counting using tiktoken
             import tiktoken
 
@@ -407,8 +414,8 @@ def api_chat():
             # 累加本会话成本
             generate.session_total_cost += estimated_cost
             warning_msg = ''
-            warning_threshold = 0.0000001  # 单次请求警告阈值（美元）
-            output_1m_threshold = 0.3  # 1M输出token高价阈值
+            warning_threshold = 0.05  # 单次请求警告阈值（美元）
+            output_1m_threshold = 0.5  # 1M输出token高价阈值
             if estimated_cost > warning_threshold or output_cost_per_1m >= output_1m_threshold:
                 cheaper = suggest_cheaper_models(model_name, output_1m_threshold)
                 cheaper_str = '、'.join(cheaper) if cheaper else ''
@@ -421,6 +428,7 @@ def api_chat():
             # 新增累计成本输出（单位：美分）
             total_cost_cents = generate.session_total_cost * 100
             total_cost_msg = f"\n本会话累计成本：约 {total_cost_cents:.2f} 美分"
+            # 只在最后输出一次统计和警告
             yield f"\n\n(Model: {model_name}, Tokens: {total_tokens}){warning_msg}{total_cost_msg}\n"
 
         except openai.NotFoundError as e:

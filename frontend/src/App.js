@@ -73,11 +73,15 @@ export default function App() {
     console.log('[INIT] state from localStorage:', state);
     return state;
   });
-  // Update selectedModel when currentId changes
+  // 只在切换会话时同步 selectedModel，发送消息时不触发
+  const prevId = React.useRef(currentId);
   useEffect(() => {
-    const conv = conversations.find(c => c.id === currentId);
-    if (conv && conv.selectedModel) {
-      setSelectedModel(conv.selectedModel);
+    if (prevId.current !== currentId) {
+      const conv = conversations.find(c => c.id === currentId);
+      if (conv && conv.selectedModel) {
+        setSelectedModel(conv.selectedModel);
+      }
+      prevId.current = currentId;
     }
   }, [currentId, conversations]);
   const [showDelete, setShowDelete] = useState(false);
@@ -224,6 +228,7 @@ export default function App() {
                 break;
               }
             }
+            // 保证当前会话的selectedModel被最新选中值覆盖
             return { ...c, messages: msgs, selectedModel: selectedModel };
           })
         );
