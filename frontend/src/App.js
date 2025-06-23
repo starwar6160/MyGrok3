@@ -5,55 +5,58 @@ import InputBar from "./components/InputBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import "./index.css";
 
+const defaultModels = [
+  "google/gemini-flash-1.5",
+  "x-ai/grok-3-mini-beta",
+  "anthropic/claude-3-haiku",
+  // Add other default models here if needed
+];
+
 const initialConversations = [
-  { id: 1, name: "会话1", messages: [], selectedModel: "google/gemini-flash-1.5" }
+  { id: 1, name: "会话1", messages: [], selectedModel: defaultModels[0] }
 ];
 
 function getInitialState() {
-  let conversations = initialConversations;
-  let currentId = initialConversations[0].id;
   try {
-    const saved = localStorage.getItem("grok3_conversations");
-    if (saved) {
-      let loadedConversations = JSON.parse(saved);
-      if (Array.isArray(loadedConversations) && loadedConversations.length) {
-        const now = Date.now();
-        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000); // 24 hours in milliseconds
-
-        conversations = loadedConversations.filter(conv => {
-          // Keep conversations that have 3 or more messages
-          if (conv.messages && conv.messages.length >= 3) {
-            return true;
+    // Try to load conversations from localStorage
+    const savedConversations = localStorage.getItem("grok3_conversations");
+    const savedCurrentId = localStorage.getItem("grok3_current_id");
+    
+    let conversations = initialConversations;
+    let currentId = initialConversations[0].id;
+    
+    if (savedConversations) {
+      const parsed = JSON.parse(savedConversations);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        conversations = parsed;
+        
+        // Set currentId from saved value if it exists and is valid
+        if (savedCurrentId) {
+          const id = Number(savedCurrentId);
+          if (conversations.some(c => c.id === id)) {
+            currentId = id;
           }
-          // Keep conversations that are less than 24 hours old (based on conversation ID)
-          // If conv.id is not a timestamp, this might need adjustment
-          if (conv.id && conv.id > twentyFourHoursAgo) {
-            return true;
-          }
-          // Delete conversations with less than 3 messages AND older than 24 hours
-          return false;
-        });
-
-        // If all conversations are filtered out, revert to initial state
-        if (!conversations.length) {
-          conversations = initialConversations;
         }
+        
+        // Ensure all conversations have a selectedModel
+        conversations = conversations.map(conv => ({
+          ...conv,
+          selectedModel: conv.selectedModel || defaultModels[0] || "google/gemini-flash-1.5"
+        }));
       }
     }
-    // Ensure all loaded conversations have a selectedModel
-    conversations = conversations.map(conv => ({ ...conv, selectedModel: conv.selectedModel || "google/gemini-flash-1.5" }));
-
-    const savedId = localStorage.getItem("grok3_current_id");
-    if (savedId && conversations.find(c => c.id === Number(savedId))) {
-      currentId = Number(savedId);
-    } else {
-      currentId = conversations[0].id;
-    }
-  } catch {
-    conversations = initialConversations.map(conv => ({ ...conv, selectedModel: conv.selectedModel || "google/gemini-flash-1.5" }));
-    currentId = initialConversations[0].id;
+    
+    return { conversations, currentId };
+  } catch (error) {
+    console.error('Error loading state from localStorage:', error);
+    return {
+      conversations: initialConversations.map(conv => ({
+        ...conv,
+        selectedModel: conv.selectedModel || defaultModels[0] || "google/gemini-flash-1.5"
+      })),
+      currentId: initialConversations[0].id
+    };
   }
-  return { conversations, currentId };
 }
 
 export default function App() {
@@ -61,18 +64,46 @@ export default function App() {
   const [lastFailedQuestion, setLastFailedQuestion] = useState("");
   const [showRetry, setShowRetry] = useState(false);
 
-  const [models, setModels] = useState((window.appConfig && window.appConfig.models) || [
-    "google/gemini-flash-1.5",
-    "x-ai/grok-3-mini-beta",
-    "anthropic/claude-3-haiku",
-    // Add other default models here if needed
-  ]);
-  const [selectedModel, setSelectedModel] = useState((window.appConfig && window.appConfig.selectedModel) || models[0]);
-  const [{ conversations, currentId }, setState] = useState(() => {
-    const state = getInitialState();
-    console.log('[INIT] state from localStorage:', state);
-    return state;
+  const [models, setModels] = useState((window.appConfig && window.appConfig.models) || defaultModels);
+  const [state, setState] = useState(() => {
+    const initialState = getInitialState();
+    console.log('[INIT] state from localStorage:', initialState);
+    return initialState;
   });
+  
+  const { conversations, currentId } = state;
+  const currentConv = conversations.find(c => c.id === currentId);
+  const [selectedModel, setSelectedModel] = useState(
+    (window.appConfig && window.appConfig.selectedModel) ||
+    (currentConv && currentConv.selectedModel) ||
+    models[0]
+  );
+
+  // Custom setter to update both selectedModel and conversation state
+  const updateSelectedModel = (newModel) => {
+    setSelectedModel(newModel);
+    if (currentConv) {
+      setState(prev => {
+        const updatedConversations = prev.conversations.map(conv =>
+          conv.id === currentId
+            ? { ...conv, selectedModel: newModel }
+            : conv
+        );
+        localStorage.setItem("grok3_conversations", JSON.stringify(updatedConversations));
+        return {
+          ...prev,
+          conversations: updatedConversations
+        };
+      });
+    }
+  };
+
+  // Sync selectedModel with current conversation
+  useEffect(() => {
+    if (currentConv && currentConv.selectedModel && currentConv.selectedModel !== selectedModel) {
+      setSelectedModel(currentConv.selectedModel);
+    }
+  }, [currentId, currentConv]);
   // 只在切换会话时同步 selectedModel，发送消息时不触发
   const prevId = React.useRef(currentId);
   useEffect(() => {
@@ -121,7 +152,7 @@ export default function App() {
     }
   };
 
-  const currentConv = conversations.find(c => c.id === currentId);
+  // currentConv is now defined earlier in the component
 
   // 用 useEffect 监控 currentId/conversations，自动修正无效 currentId
   React.useEffect(() => {
@@ -143,12 +174,26 @@ export default function App() {
 
   // 新建会话
   const addConversation = () => {
-    const newId = Date.now(); // 使用时间戳作为唯一ID
-    // Use the first model in the current models list as the default
-    const defaultModel = models[0];
-    const newConv = { id: newId, name: `新会话${conversations.length + 1}`, messages: [], selectedModel: defaultModel };
-    setConversationsAndCurrentId(prev => [...prev, newConv], newId);
-    setSelectedModel(defaultModel); // Set the newly added conversation's model as the current selected model
+    const newId = Date.now();
+    const defaultModel = models.find(m => m.includes('grok-3-mini')) || models[0];
+    const newConv = { 
+      id: newId, 
+      name: `新会话${conversations.length + 1}`, 
+      messages: [], 
+      selectedModel: defaultModel 
+    };
+    
+    setState(prev => {
+      const newConversations = [...prev.conversations, newConv];
+      localStorage.setItem("grok3_conversations", JSON.stringify(newConversations));
+      localStorage.setItem("grok3_current_id", String(newId));
+      return {
+        conversations: newConversations,
+        currentId: newId
+      };
+    });
+    
+    setSelectedModel(defaultModel);
   };
 
 
@@ -314,7 +359,7 @@ export default function App() {
           onSend={sendMessage}
           onCopy={copyConversation}
           selectedModel={selectedModel}
-          onModelChange={setSelectedModel}
+          onModelChange={updateSelectedModel}
           onRetry={showRetry ? handleRetry : undefined}
           models={models}
         />
