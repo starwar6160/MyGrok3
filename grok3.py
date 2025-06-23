@@ -65,6 +65,7 @@ MODELS_STABLE = [
 ]
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
+DEFAULT_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"
 
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
@@ -298,7 +299,7 @@ def serve_index_with_config():
         # Prepare appConfig script
         # Ensure MODELS is JSON serializable (it should be a list of strings)
         models_json = json.dumps(MODELS)
-        selected_model_json = json.dumps(MODELS[0]) # Default model for initial load
+        selected_model_json = json.dumps("x-ai/grok-3-mini-beta") # Default model for initial load
 
         app_config_script = f'''<script>
           window.appConfig = {{
@@ -349,7 +350,7 @@ def api_chat():
         print('[FLASK] /api/chat received:', request.get_json())
     data = request.get_json()
     question = data.get("question", "").strip()
-    selected_model = data.get("model", "google/gemini-flash-1.5")
+    selected_model = data.get("model", "x-ai/grok-3-mini-beta")
     history = data.get("history", [])
     conversation_id = data.get("conversation_id") or "default"
     if not question:

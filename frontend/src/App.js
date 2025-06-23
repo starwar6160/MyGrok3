@@ -175,7 +175,7 @@ export default function App() {
   // 新建会话
   const addConversation = () => {
     const newId = Date.now();
-    const defaultModel = models.find(m => m.includes('grok-3-mini')) || models[0];
+    const defaultModel = 'x-ai/grok-3-mini-beta';
     const newConv = { 
       id: newId, 
       name: `新会话${conversations.length + 1}`, 
