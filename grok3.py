@@ -428,7 +428,7 @@ def api_chat():
                     warning_msg += f" 如需节省成本，请考虑切换到 {cheaper_str}。"
             # 新增累计成本输出（单位：美分）
             total_cost_cents = generate.session_total_cost * 100
-            total_cost_msg = f"\n本会话累计成本：约 {total_cost_cents:.2f} 美分"
+            total_cost_msg = f"\n本会话累计成本：约 {total_cost_cents:.2f} 美分" if total_cost_cents > 0.1 else ""
             # 只在最后输出一次统计和警告
             yield f"\n\n(Model: {model_name}, Tokens: {total_tokens}){warning_msg}{total_cost_msg}\n"
 
