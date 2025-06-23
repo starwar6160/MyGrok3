@@ -418,7 +418,29 @@ def api_chat():
             warning_threshold = 0.05  # 单次请求警告阈值（美元）
             output_1m_threshold = 0.5  # 1M输出token高价阈值
             if estimated_cost > warning_threshold or output_cost_per_1m >= output_1m_threshold:
-                cheaper = suggest_cheaper_models(model_name, output_1m_threshold)
+                # 新逻辑：随机推荐2个非free且输出成本<0.3美元的模型
+                import random
+                ensure_openrouter_models()
+                price_dict = openrouter_models_cache.get('price_dict', {})
+                # 强制转为float，过滤无效或异常数据，确保只推荐真实低价模型
+                candidates = []
+                for m, v in price_dict.items():
+                    try:
+                        if (
+                            isinstance(v, dict)
+                            and 'output' in v
+                            and v['output'] is not None
+                            and 'free' not in m
+                            and m != model_name
+                        ):
+                            output_cost = float(v['output'])
+                            if (output_cost * 1_000_000) < 0.3:
+                                candidates.append(m)
+                    except Exception:
+                        continue
+
+                random.shuffle(candidates)
+                cheaper = candidates[:2]
                 cheaper_str = '、'.join(cheaper) if cheaper else ''
                 if output_cost_per_1m >= output_1m_threshold:
                     warning_msg = f"\n\n成本提示：当前模型输出成本较高，1M token 约 {output_cost_per_1m:.2f} 美元。"
