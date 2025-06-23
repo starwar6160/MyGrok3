@@ -7,13 +7,12 @@ import "./index.css";
 
 const defaultModels = [
   "google/gemini-flash-1.5",
-  "x-ai/grok-3-mini-beta",
   "anthropic/claude-3-haiku",
   // Add other default models here if needed
 ];
 
 const initialConversations = [
-  { id: 1, name: "会话1", messages: [], selectedModel: defaultModels[0] }
+  { id: 1, name: "会话1", messages: [] }
 ];
 
 function getInitialState() {
@@ -38,10 +37,10 @@ function getInitialState() {
           }
         }
         
-        // Ensure all conversations have a selectedModel
+        // Do not set a default selectedModel here; let the backend handle it.
         conversations = conversations.map(conv => ({
           ...conv,
-          selectedModel: conv.selectedModel || defaultModels[0] || "google/gemini-flash-1.5"
+          selectedModel: conv.selectedModel // Keep existing selectedModel, or leave undefined
         }));
       }
     }
@@ -52,7 +51,7 @@ function getInitialState() {
     return {
       conversations: initialConversations.map(conv => ({
         ...conv,
-        selectedModel: conv.selectedModel || defaultModels[0] || "google/gemini-flash-1.5"
+        selectedModel: conv.selectedModel // Keep existing selectedModel, or leave undefined
       })),
       currentId: initialConversations[0].id
     };
@@ -74,9 +73,7 @@ export default function App() {
   const { conversations, currentId } = state;
   const currentConv = conversations.find(c => c.id === currentId);
   const [selectedModel, setSelectedModel] = useState(
-    (window.appConfig && window.appConfig.selectedModel) ||
-    (currentConv && currentConv.selectedModel) ||
-    models[0]
+    (currentConv && currentConv.selectedModel) || models[0]
   );
 
   // Custom setter to update both selectedModel and conversation state
@@ -175,14 +172,13 @@ export default function App() {
   // 新建会话
   const addConversation = () => {
     const newId = Date.now();
-    const defaultModel = 'x-ai/grok-3-mini-beta';
     const newConv = { 
       id: newId, 
-      name: `新会话${conversations.length + 1}`, 
-      messages: [], 
-      selectedModel: defaultModel 
+      name: `新会话${conversations.length + 1}`,
+      messages: []
+      // 不设置 selectedModel 字段，让后端决定默认
     };
-    
+
     setState(prev => {
       const newConversations = [...prev.conversations, newConv];
       localStorage.setItem("grok3_conversations", JSON.stringify(newConversations));
@@ -192,8 +188,7 @@ export default function App() {
         currentId: newId
       };
     });
-    
-    setSelectedModel(defaultModel);
+    // 不再 setSelectedModel，selectedModel 会跟随当前会话或后端默认
   };
 
 

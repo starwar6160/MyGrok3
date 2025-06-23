@@ -37,6 +37,8 @@ USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 MODELS_EXPERIMENTAL = [
     #便宜，而且能正确回答9.9和9.11哪一个大的模型：
+    "mistralai/ministral-8b",    #10/10
+    "mistralai/mixtral-8x7b-instruct",#8/24
     "google/gemini-2.5-flash-lite-preview-06-17",   #10/40    
     "qwen/qwen3-14b",   #6/24
     "moonshotai/kimi-dev-72b:free",   
@@ -47,13 +49,16 @@ MODELS_EXPERIMENTAL = [
     "thedrummer/unslopnemo-12b",#45/45    
     "deepseek/deepseek-r1-0528:free",    #55/219    
     "minimax/minimax-m1",#30/165
+    "mistralai/mixtral-8x22b-instruct",#90/90
     #便宜，但是无法正确回答9.9和9.11哪一个大的模型：
+    "google/gemini-flash-1.5-8b",    #3.8/15
     "google/gemma-3-12b-it",    #5/10
     "mistralai/devstral-small",#6/12
 
 ]
 #"tngtech/deepseek-r1t-chimera:free",
 #    "deepseek/deepseek-chat-v3-0324",#27/110    
+# microsoft/wizardlm-2-8x22b
 
 MODELS_STABLE = [
     "google/gemini-2.5-flash-lite-preview-06-17",
@@ -299,7 +304,7 @@ def serve_index_with_config():
         # Prepare appConfig script
         # Ensure MODELS is JSON serializable (it should be a list of strings)
         models_json = json.dumps(MODELS)
-        selected_model_json = json.dumps("x-ai/grok-3-mini-beta") # Default model for initial load
+        selected_model_json = json.dumps(DEFAULT_MODEL) # Default model for initial load
 
         app_config_script = f'''<script>
           window.appConfig = {{
@@ -350,7 +355,7 @@ def api_chat():
         print('[FLASK] /api/chat received:', request.get_json())
     data = request.get_json()
     question = data.get("question", "").strip()
-    selected_model = data.get("model", "x-ai/grok-3-mini-beta")
+    selected_model = data.get("model", "x-ai/grok-3-mini")
     history = data.get("history", [])
     conversation_id = data.get("conversation_id") or "default"
     if not question:
