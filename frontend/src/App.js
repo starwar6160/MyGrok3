@@ -172,11 +172,14 @@ export default function App() {
   // 新建会话
   const addConversation = () => {
     const newId = Date.now();
-    const newConv = { 
-      id: newId, 
+    // 强制新会话和全局selectedModel都用后端DEFAULT_MODEL
+    const defaultModel = (window.appConfig && window.appConfig.selectedModel) || models[0];
+    setSelectedModel(defaultModel);
+    const newConv = {
+      id: newId,
       name: `新会话${conversations.length + 1}`,
-      messages: []
-      // 不设置 selectedModel 字段，让后端决定默认
+      messages: [],
+      selectedModel: defaultModel
     };
 
     setState(prev => {
@@ -188,9 +191,7 @@ export default function App() {
         currentId: newId
       };
     });
-    // 不再 setSelectedModel，selectedModel 会跟随当前会话或后端默认
   };
-
 
   // 删除会话
   const deleteConversation = () => {

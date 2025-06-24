@@ -35,24 +35,23 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 # Flag to switch between experimental and stable model lists
 USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
-MODELS_EXPERIMENTAL = [
-    #便宜，而且能正确回答9.9和9.11哪一个大的模型：
-    "mistralai/ministral-8b",    #10/10
-    "mistralai/mixtral-8x7b-instruct",#8/24
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40    
-    "qwen/qwen3-14b",   #6/24
-    "moonshotai/kimi-dev-72b:free",   
-    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
-    #便宜，但比前面的贵的经济型模型
-    "openai/gpt-4o-mini",#15/60    
-    "x-ai/grok-3-mini",#30/50
-    "thedrummer/unslopnemo-12b",#45/45    
-    "deepseek/deepseek-r1-0528:free",    #55/219    
-    "minimax/minimax-m1",#30/165
-    "mistralai/mixtral-8x22b-instruct",#90/90
-    #便宜，但是无法正确回答9.9和9.11哪一个大的模型：
-    "google/gemini-flash-1.5-8b",    #3.8/15
+MODELS_EXPERIMENTAL = [        
+    #能正确回答9.9和9.11哪一个大,正确讲解日语语法的模型：    
     "google/gemma-3-12b-it",    #5/10
+    #gemini-flash-1.5-8b很便宜，飞快，数字比较错误但是能准确讲解日语语法
+    "google/gemini-flash-1.5-8b",    #3.8/15
+    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40        
+    "moonshotai/kimi-dev-72b:free",       
+    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
+    "deepseek/deepseek-r1-0528:free",    #55/219    
+    #一般经济型模型
+    "openai/gpt-4o-mini",#15/60
+    "x-ai/grok-3-mini",#30/50    
+    "thedrummer/unslopnemo-12b",#45/45    
+    
+    #便宜，但是无法正确回答9.9和9.11哪一个大的模型：
+    
+    
     "mistralai/devstral-small",#6/12
 
 ]
@@ -62,15 +61,15 @@ MODELS_EXPERIMENTAL = [
 
 MODELS_STABLE = [
     "google/gemini-2.5-flash-lite-preview-06-17",
+    "x-ai/grok-3-mini",    
     "qwen/qwen3-14b",   #6/24
     "openai/gpt-4o-mini",
-    "x-ai/grok-3-mini",    
     "deepseek/deepseek-r1-distill-llama-70b:free",
     "thedrummer/unslopnemo-12b",#45/45    
 ]
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
-DEFAULT_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"
+DEFAULT_MODEL = MODELS[0]
 
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}

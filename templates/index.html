@@ -306,7 +306,7 @@
         conversations: [],
         currentId: null,
         question: '',
-        model: 'grok-3-mini',
+        model: window.appConfig && window.appConfig.selectedModel ? window.appConfig.selectedModel : 'grok-3-mini',
         fontSize: localStorage.getItem('fontSize') || '22',
         showDeleteConfirm: false,
 
@@ -319,15 +319,19 @@
           localStorage.setItem('chats', JSON.stringify(this.conversations));
         },
         addConversation() {
-          const id = Date.now();
-          this.conversations.unshift({
-            id,
-            name: `会话 ${this.conversations.length+1}`,
-            messages: []
-          });
-          this.currentId = id;
-          this.save();
-        },
+      const id = Date.now();
+      // 每次新会话都强制用后端注入的 DEFAULT_MODEL
+      const defaultModel = window.appConfig && window.appConfig.selectedModel ? window.appConfig.selectedModel : 'grok-3-mini';
+      this.model = defaultModel;
+      this.conversations.unshift({
+        id,
+        name: `会话 ${this.conversations.length+1}`,
+        messages: [],
+        selectedModel: defaultModel
+      });
+      this.currentId = id;
+      this.save();
+    },
         selectConversation(id) {
           this.currentId = id;
         },
