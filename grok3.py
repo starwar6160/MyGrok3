@@ -37,10 +37,10 @@ USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 MODELS_EXPERIMENTAL = [        
     #能正确回答9.9和9.11哪一个大,正确讲解日语语法的模型：    
+    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40        
     "google/gemma-3-12b-it",    #5/10
     #gemini-flash-1.5-8b很便宜，飞快，数字比较错误但是能准确讲解日语语法
-    "google/gemini-flash-1.5-8b",    #3.8/15
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40        
+    "google/gemini-flash-1.5-8b",    #3.8/15    
     "moonshotai/kimi-dev-72b:free",       
     "deepseek/deepseek-r1-distill-llama-70b",   #10/40
     "deepseek/deepseek-r1-0528:free",    #55/219    
@@ -48,21 +48,13 @@ MODELS_EXPERIMENTAL = [
     "openai/gpt-4o-mini",#15/60
     "x-ai/grok-3-mini",#30/50    
     "thedrummer/unslopnemo-12b",#45/45    
-    
-    #便宜，但是无法正确回答9.9和9.11哪一个大的模型：
-    
-    
-    "mistralai/devstral-small",#6/12
-
 ]
-#"tngtech/deepseek-r1t-chimera:free",
-#    "deepseek/deepseek-chat-v3-0324",#27/110    
-# microsoft/wizardlm-2-8x22b
+
 
 MODELS_STABLE = [
-    "google/gemini-2.5-flash-lite-preview-06-17",
+    "google/gemma-3-12b-it",    #5/10
+    "google/gemini-2.5-flash-lite-preview-06-17",#10/40
     "x-ai/grok-3-mini",    
-    "qwen/qwen3-14b",   #6/24
     "openai/gpt-4o-mini",
     "deepseek/deepseek-r1-distill-llama-70b:free",
     "thedrummer/unslopnemo-12b",#45/45    
