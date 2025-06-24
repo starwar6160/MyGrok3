@@ -75,6 +75,10 @@ DEFAULT_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"
 # 简单 LLM cache（可换成 Redis 等）
 llm_cache = {}
 
+# 缓存大小限制和过期时间
+LLM_CACHE_MAX_SIZE = 1000  # 最大缓存条目数
+LLM_CACHE_EXPIRY_SECONDS = 3600  # 缓存过期时间（1小时）
+
 # === OpenRouter模型价格缓存与每日刷新 ===
 import threading
 import time
@@ -214,44 +218,159 @@ def suggest_cheaper_models(current_model, max_output_cost=1.0):
 
 
 def get_llm_cache_key(model, messages):
-    # 用模型+消息内容哈希做key
+    # 用模型+消息内容哈希做key，使用更安全的SHA-256哈希算法
     key_src = model + json.dumps(messages, ensure_ascii=False)
-    return hashlib.md5(key_src.encode('utf-8')).hexdigest()
+    return hashlib.sha256(key_src.encode('utf-8')).hexdigest()
 
 def get_llm_cached(model, messages, stream=False):
+    # 清理过期缓存
+    clean_expired_cache()
+    
+    # 验证消息格式
+    validated_messages = validate_messages(messages)
+    
     # 临时禁用缓存，强制每次都请求 LLM
     if stream:
         chunks = []
-        for chunk in ask_grok_stream(model, messages):
+        for chunk in ask_grok_stream(model, validated_messages):
             chunks.append(chunk)
             yield chunk
     else:
-        return ask_grok(model, messages)
+        return ask_grok(model, validated_messages)
+
+def clean_expired_cache():
+    """清理过期缓存和超出大小限制的缓存"""
+    global llm_cache
+    current_time = time.time()
+    
+    # 删除过期缓存
+    expired_keys = []
+    for key, value in llm_cache.items():
+        if 'timestamp' in value and current_time - value['timestamp'] > LLM_CACHE_EXPIRY_SECONDS:
+            expired_keys.append(key)
+    
+    for key in expired_keys:
+        del llm_cache[key]
+    
+    # 如果缓存大小超出限制，删除最早的缓存
+    if len(llm_cache) > LLM_CACHE_MAX_SIZE:
+        # 按时间戳排序
+        sorted_cache = sorted(llm_cache.items(), key=lambda x: x[1].get('timestamp', 0))
+        # 删除最早的缓存，直到大小符合限制
+        for key, _ in sorted_cache[:len(llm_cache) - LLM_CACHE_MAX_SIZE]:
+            del llm_cache[key]
+
+def validate_messages(messages):
+    """验证消息格式，防止注入恶意内容"""
+    if not isinstance(messages, list):
+        return []
+    
+    validated = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+            
+        # 只允许有效的角色
+        role = msg.get('role')
+        if role not in ['system', 'user', 'assistant']:
+            continue
+            
+        # 确保内容是字符串且长度合理
+        content = msg.get('content')
+        if not isinstance(content, str):
+            content = ''
+        if len(content) > 100000:  # 设置合理的长度上限
+            content = content[:100000] + '... [内容已截断]'
+            
+        validated.append({'role': role, 'content': content})
+    
+    return validated
 
 # 自动摘要历史，超 max_chars 时用 LLM 总结前面的，仅保留最近3条原文
 # 实际生产建议用 LLM 生成摘要，这里用拼接模拟
 
 def summarize_history(history, max_chars=4000, keep_last_n=8, summary_max_len=1000):
+    # 验证输入，确保history是有效的列表类型
+    if not isinstance(history, list):
+        return []
+        
     # 移除已有 system 摘要
-    filtered = [msg for msg in history if msg.get('role') != 'system']
+    filtered = [msg for msg in history if isinstance(msg, dict) and msg.get('role') != 'system']
+    
+    # 验证所有消息内容，确保安全性
+    filtered = validate_messages(filtered)
+    
     total_chars = sum(len(msg.get('content', '')) for msg in filtered)
     if total_chars <= max_chars:
         return filtered
+        
     # 保留最近N条，前面合并成摘要
-    recent = filtered[-keep_last_n:]
-    to_summarize = filtered[:-keep_last_n]
+    recent = filtered[-keep_last_n:] if keep_last_n > 0 else []
+    to_summarize = filtered[:-keep_last_n] if keep_last_n > 0 else filtered
+    
     if not to_summarize:
         return recent
+        
+    # 限制要摘要的内容大小，防止请求过大
+    max_to_summarize_chars = 50000  # 设置一个合理的上限
+    current_chars = 0
+    limited_to_summarize = []
+    
+    for msg in to_summarize:
+        msg_content = msg.get('content', '')
+        msg_chars = len(msg_content)
+        
+        if current_chars + msg_chars <= max_to_summarize_chars:
+            limited_to_summarize.append(msg)
+            current_chars += msg_chars
+        else:
+            # 如果这条消息会导致超出限制，只取部分内容
+            chars_to_take = max_to_summarize_chars - current_chars
+            if chars_to_take > 0:
+                truncated_msg = msg.copy()
+                truncated_msg['content'] = msg_content[:chars_to_take] + '... [内容已截断]'
+                limited_to_summarize.append(truncated_msg)
+            break
+    
+    # 构建安全的摘要提示
     summary_prompt = (
         f"请用简明但尽量保留细节的方式总结以下多轮对话内容，摘要长度不超过{summary_max_len}字，便于后续上下文继续：\n"
-        + '\n'.join(f"[{msg['role']}]: {msg['content']}" for msg in to_summarize)
     )
-    summary_text = get_llm_cached('grok-3-mini', [{"role": "user", "content": summary_prompt}])
+    
+    for msg in limited_to_summarize:
+        role = msg.get('role', '')
+        content = msg.get('content', '')[:10000]  # 限制每条消息在提示中的长度
+        summary_prompt += f"[{role}]: {content}\n"
+    
+    try:
+        summary_text = get_llm_cached('grok-3-mini', [{"role": "user", "content": summary_prompt}])
+        # 验证摘要文本
+        if not isinstance(summary_text, str):
+            summary_text = "历史对话摘要生成失败"
+        elif len(summary_text) > summary_max_len:
+            summary_text = summary_text[:summary_max_len] + "..."
+    except Exception as e:
+        # 处理摘要生成失败的情况
+        summary_text = f"历史对话摘要生成失败: {str(e)[:100]}"
+    
     summary = {'role': 'system', 'content': f'历史摘要：{summary_text}'}
     new_history = [summary] + recent
-    # 如果还超长，递归摘要
+    
+    # 如果还超长，递归摘要，但限制递归深度防止栈溢出
     if sum(len(msg.get('content', '')) for msg in new_history) > max_chars:
-        return summarize_history(new_history, max_chars, keep_last_n, summary_max_len)
+        # 添加递归深度追踪，防止无限递归
+        recursion_depth = getattr(summarize_history, '_recursion_depth', 0) + 1
+        if recursion_depth > 3:  # 限制最大递归深度
+            # 如果递归过深，直接截断历史
+            return new_history[-keep_last_n:] if keep_last_n > 0 else []
+        
+        # 记录递归深度
+        summarize_history._recursion_depth = recursion_depth
+        result = summarize_history(new_history, max_chars, keep_last_n, summary_max_len)
+        # 重置递归深度
+        summarize_history._recursion_depth = 0
+        return result
+    
     return new_history
 
 # Function to query Grok model
@@ -352,12 +471,44 @@ def api_title_summary():
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     if DEBUG_MESSAGES:
-        print('[FLASK] /api/chat received:', request.get_json())
-    data = request.get_json()
-    question = data.get("question", "").strip()
-    selected_model = data.get("model", "x-ai/grok-3-mini")
-    history = data.get("history", [])
-    conversation_id = data.get("conversation_id") or "default"
+        # 仅打印有限的消息信息，不打印完整历史记录
+        debug_data = {}
+        if isinstance(data, dict):
+            debug_data = {
+                'question_length': len(question) if isinstance(question, str) else 0,
+                'model': selected_model,
+                'history_length': len(history) if isinstance(history, list) else 0,
+                'conversation_id': conversation_id
+            }
+        print('[FLASK] /api/chat received:', debug_data)
+    try:
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid JSON format"}), 400
+            
+        question = data.get("question", "")
+        if not isinstance(question, str):
+            return jsonify({"error": "Question must be a string"}), 400
+        question = question.strip()
+        
+        selected_model = data.get("model", "x-ai/grok-3-mini")
+        if not isinstance(selected_model, str):
+            selected_model = "x-ai/grok-3-mini"
+        # 验证模型是否在允许列表中
+        if selected_model not in MODELS and selected_model != DEFAULT_MODEL:
+            selected_model = DEFAULT_MODEL
+        
+        history = data.get("history", [])
+        if not isinstance(history, list):
+            history = []
+            
+        conversation_id = data.get("conversation_id")
+        if not isinstance(conversation_id, str) or not conversation_id:
+            conversation_id = "default"
+        # 防止路径遍历攻击
+        conversation_id = conversation_id.replace("/", "").replace("\\", "")[:50]
+    except Exception as e:
+        return jsonify({"error": f"Invalid request format: {str(e)[:100]}"}), 400
     if not question:
         return jsonify({"error": "Please enter a question."}), 400
     # 拼接历史+当前
@@ -367,9 +518,9 @@ def api_chat():
     import time
     
     if DEBUG_MESSAGES:
-        print(f"[api_chat] question={question!r}")
+        print(f"[api_chat] question_length={len(question)}")
         print(f"[api_chat] model={selected_model!r}")
-        print(f"[api_chat] history={history!r}")
+        print(f"[api_chat] history_count={len(history)}")
     def generate():
         full_answer = ''
         model_name = selected_model # Capture the model name
