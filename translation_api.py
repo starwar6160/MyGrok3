@@ -21,8 +21,8 @@ client = openai.OpenAI(
 # Model A: For translation between Chinese and English
 TRANSLATION_MODEL = "google/gemini-flash-1.5-8b"  # More literal, instruction-following model for translation
 # Model B: English-only model
-#ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
-ENGLISH_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"  # Handles English content only
+ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
+#ENGLISH_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"  # Handles English content only
 
 
 # Route to serve the translation page
@@ -38,6 +38,7 @@ def api_translate():
         text = data.get('text', '')
         source_lang = data.get('source_lang', 'auto')
         target_lang = data.get('target_lang', 'en')
+        stream = data.get('stream', False)
         
         if not text:
             return jsonify({'error': 'No text provided'}), 400
@@ -59,20 +60,85 @@ def api_translate():
             {"role": "user", "content": text}
         ]
         
-        # Call the translation model (Model A)
-        response = client.chat.completions.create(
-            model=TRANSLATION_MODEL,
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.3
-        )
+        # Check if streaming is requested
+        stream = data.get('stream', False)
         
-        translated_text = response.choices[0].message.content
-        return jsonify({
-            'translated_text': translated_text,
-            'source_lang': source_lang,
-            'target_lang': target_lang
-        })
+        if stream:
+            # For streaming response
+            def generate():
+                try:
+                    response = client.chat.completions.create(
+                        model=TRANSLATION_MODEL,
+                        messages=messages,
+                        max_tokens=2000,
+                        temperature=0.3,
+                        stream=True
+                    )
+                    
+                    # Buffer to accumulate content
+                    buffer = ""
+                    
+                    for chunk in response:
+                        if not chunk.choices:
+                            continue
+                            
+                        # Get the content if available
+                        if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
+                            content = chunk.choices[0].delta.content
+                            buffer += content
+                            
+                            # Yield the content as it comes
+                            yield f"data: {json.dumps({'content': content})}\n\n"
+                    
+                    # Send a final message to indicate completion
+                    yield "data: [DONE]\n\n"
+                    
+                except Exception as e:
+                    error_msg = f"Error during streaming: {str(e)}"
+                    print(error_msg)  # Log the error
+                    yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                    yield "data: [DONE]\n\n"
+            
+            # Create a streaming response with proper SSE headers
+            def stream_response():
+                try:
+                    for chunk in generate():
+                        yield chunk
+                except Exception as e:
+                    print(f"Error in stream: {str(e)}")
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                finally:
+                    yield "data: [DONE]\n\n"
+            
+            # Create and return the response with proper headers
+            response = Response(
+                stream_response(),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no',
+                    'Access-Control-Allow-Origin': '*',
+                    'Transfer-Encoding': 'chunked'
+                }
+            )
+            return response
+        else:
+            # For non-streaming response (backward compatibility)
+            response = client.chat.completions.create(
+                model=TRANSLATION_MODEL,
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.3,
+                stream=False
+            )
+            
+            translated_text = response.choices[0].message.content
+            return jsonify({
+                'translated_text': translated_text,
+                'source_lang': source_lang,
+                'target_lang': target_lang
+            })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -140,13 +206,26 @@ def api_process_with_english_model():
             english_messages.append({"role": "user", "content": translated_input})
             
             # Process with English model
-            response = client.chat.completions.create(
-                model=ENGLISH_MODEL,
-                messages=english_messages,
-                max_tokens=2000,
-                temperature=0.7,
-                stream=stream_mode
-            )
+            # Add error handling and retry logic for the API call
+            max_retries = 3
+            retry_delay = 1  # seconds
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.chat.completions.create(
+                        model=ENGLISH_MODEL,
+                        messages=english_messages,
+                        max_tokens=2000,
+                        temperature=0.7,
+                        stream=stream_mode,
+                        timeout=30  # Add timeout to prevent hanging
+                    )
+                    break  # If successful, exit the retry loop
+                except Exception as e:
+                    if attempt == max_retries - 1:  # Last attempt
+                        yield f"Error: Failed to get response after {max_retries} attempts: {str(e)}"
+                        return
+                    time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
             
             english_output = ""
             
@@ -170,15 +249,22 @@ def api_process_with_english_model():
                     {"role": "user", "content": english_output}
                 ]
                 
+                # Stream the Chinese translation back to the client
+                yield "[中文翻译]:\n"
+                
+                # Use streaming for the back translation as well
                 back_translate_response = client.chat.completions.create(
                     model=TRANSLATION_MODEL, 
                     messages=back_translate_messages,
                     max_tokens=2000,
-                    temperature=0.3
+                    temperature=0.3,
+                    stream=True  # Enable streaming for back translation
                 )
                 
-                chinese_output = back_translate_response.choices[0].message.content
-                yield f"[中文翻译]:\n{chinese_output}"
+                # Stream the response chunks
+                for chunk in back_translate_response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
                 
         except Exception as e:
             yield f"Error: {str(e)}"

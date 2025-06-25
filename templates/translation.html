@@ -434,11 +434,12 @@
         // Initialize and check notice on page load
         checkEnglishOutputNotice();
 
-        // Direct translation functionality
+        // Direct translation functionality with streaming support
         document.getElementById('translateBtn').addEventListener('click', async () => {
             const sourceText = document.getElementById('sourceText').value;
             const sourceLang = document.getElementById('sourceLang').value;
             const targetLang = document.getElementById('targetLang').value;
+            const translatedTextArea = document.getElementById('translatedText');
             
             if (!sourceText.trim()) {
                 alert('Please enter some text to translate');
@@ -451,6 +452,9 @@
             translateBtn.innerHTML = 'Translating... <span class="loading"></span>';
             translateBtn.disabled = true;
             
+            // Clear previous content
+            translatedTextArea.value = '';
+            
             try {
                 const response = await fetch('/translation/api/translate', {
                     method: 'POST',
@@ -460,21 +464,143 @@
                     body: JSON.stringify({
                         text: sourceText,
                         source_lang: sourceLang,
-                        target_lang: targetLang
+                        target_lang: targetLang,
+                        stream: true  // Enable streaming
                     })
                 });
                 
-                const data = await response.json();
-                
-                if (data.error) {
-                    throw new Error(data.error);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Translation failed');
                 }
                 
-                document.getElementById('translatedText').value = data.translated_text;
-                saveDirectTranslationOutput();
+                // Function to save the translated text to local storage
+                const saveTranslation = () => {
+                    const output = translatedTextArea.value;
+                    if (output && !output.startsWith('Error:')) {
+                        localStorage.setItem('translation_directOutput', output);
+                    }
+                };
+
+                // Handle Server-Sent Events (SSE) response
+                const url = new URL('/translation/api/translate', window.location.origin);
+                url.searchParams.append('text', sourceText);
+                url.searchParams.append('source_lang', sourceLang);
+                url.searchParams.append('target_lang', targetLang);
+                url.searchParams.append('stream', 'true');
+                
+                console.log('Connecting to SSE endpoint:', url.toString());
+                
+                // Clear the textarea before starting
+                translatedTextArea.value = '';
+                
+                // Use fetch API with ReadableStream for better control
+                const connectSSE = async () => {
+                    let isComplete = false;
+                    
+                    try {
+                        const response = await fetch(url.toString(), {
+                            method: 'POST',
+                            headers: {
+                                'Accept': 'text/event-stream',
+                                'Content-Type': 'application/json',
+                                'Cache-Control': 'no-cache',
+                                'Connection': 'keep-alive'
+                            },
+                            body: JSON.stringify({
+                                text: sourceText,
+                                source_lang: sourceLang,
+                                target_lang: targetLang,
+                                stream: true
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json().catch(() => ({}));
+                            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                        }
+                        
+                        if (!response.body) {
+                            throw new Error('ReadableStream not supported in this browser');
+                        }
+                        
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+                        let buffer = '';
+                        
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            
+                            if (done) {
+                                console.log('Stream complete');
+                                break;
+                            }
+                            
+                            // Decode the chunk of data
+                            const chunk = decoder.decode(value, { stream: true });
+                            console.log('Received chunk:', chunk);
+                            
+                            // Process each line (SSE format)
+                            const lines = (buffer + chunk).split('\n');
+                            buffer = lines.pop() || '';
+                            
+                            for (const line of lines) {
+                                if (!line.trim()) continue;
+                                
+                                if (line.startsWith('data: ')) {
+                                    const data = line.slice(6).trim();
+                                    
+                                    if (data === '[DONE]') {
+                                        isComplete = true;
+                                        saveTranslation();
+                                        break;
+                                    }
+                                    
+                                    try {
+                                        const parsed = JSON.parse(data);
+                                        if (parsed.error) {
+                                            throw new Error(parsed.error);
+                                        }
+                                        if (parsed.content) {
+                                            translatedTextArea.value += parsed.content;
+                                            translatedTextArea.scrollTop = translatedTextArea.scrollHeight;
+                                        }
+                                    } catch (e) {
+                                        console.error('Error parsing SSE data:', e);
+                                        throw e;
+                                    }
+                                }
+                            }
+                            
+                            if (isComplete) break;
+                        }
+                        
+                    } catch (error) {
+                        console.error('SSE connection error:', error);
+                        translatedTextArea.value = `Error: ${error.message}`;
+                    } finally {
+                        // Always clean up the UI
+                        translateBtn.textContent = originalText;
+                        translateBtn.disabled = false;
+                        
+                        // Save the final translation if not already saved
+                        if (!isComplete) {
+                            saveTranslation();
+                        }
+                    }
+                };
+                
+                // Start the SSE connection
+                connectSSE().catch(error => {
+                    console.error('Unhandled error in connectSSE:', error);
+                    translatedTextArea.value = `Error: ${error.message}`;
+                    translateBtn.textContent = originalText;
+                    translateBtn.disabled = false;
+                });
+                
             } catch (error) {
-                alert('Translation failed: ' + error.message);
                 console.error('Translation error:', error);
+                translatedTextArea.value = `Error: ${error.message}`;
             } finally {
                 // Remove loading indicator
                 translateBtn.textContent = originalText;
