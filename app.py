@@ -6,11 +6,15 @@ refactored components.
 """
 import os
 import socket
-from flask import Flask
+import uuid
+from flask import Flask, g, session
 from flask_cors import CORS
 
 from MyGrok3 import logging_config
-from MyGrok3.routes import register_blueprints
+from MyGrok3.chat_api import register_blueprint as register_chat_api
+from MyGrok3.frontend import register_blueprint as register_frontend
+from MyGrok3.translation_api import init_translation_api
+from MyGrok3.session_store import get_session_store
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)
@@ -32,6 +36,10 @@ def create_app():
     # Configure app
     app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')  # Replace in production
     
+    # Initialize session store singleton
+    store = get_session_store()
+    logger.info("Session store initialized")
+    
     # Enable CORS
     try:
         CORS(app)
@@ -39,8 +47,20 @@ def create_app():
     except ImportError:
         logger.warning("Flask-CORS not installed, CORS will not be enabled")
     
+    # Register before_request handler to set session_id
+    @app.before_request
+    def before_request():
+        if 'session_id' not in session:
+            session['session_id'] = str(uuid.uuid4())
+            logger.debug(f"Created new session: {session['session_id']}")
+        g.session_id = session['session_id']
+    
     # Register all blueprints
-    register_blueprints(app)
+    register_chat_api(app)
+    register_frontend(app)
+    init_translation_api(app)
+    
+    logger.info("All blueprints registered")
     
     return app
 
