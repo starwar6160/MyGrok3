@@ -686,107 +686,157 @@
                 let lastRenderTime = 0;
                 const RENDER_THROTTLE_MS = 100; // Throttle rendering to improve performance
                 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    const chunk = decoder.decode(value, { stream: true });
-                    buffer += chunk;
-                    
-                    // Process the buffer line by line
-                    let lineEnd;
-                    while ((lineEnd = buffer.indexOf('\n')) !== -1) {
-                        const line = buffer.substring(0, lineEnd).trim();
-                        buffer = buffer.substring(lineEnd + 1);
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
                         
-                        if (line.startsWith('[Translated query to English]:')) {
-                            // This is the English translation of the user's Chinese input
-                            inEnglishSection = false; // Stop any previous section
-                            const translation = line.substring('[Translated query to English]:'.length).trim();
-                            // Save the English translation to the user's message
-                            const userMsgIndex = conversationHistory.length - 2; // The user's message is second to last
-                            if (userMsgIndex >= 0 && conversationHistory[userMsgIndex].role === 'user') {
-                                conversationHistory[userMsgIndex].english = translation;
-                            }
-                            continue;
-                        } else if (line === '[English Model Response]:') {
-                            // This is the start of the English response
-                            inEnglishSection = true;
-                            inChineseSection = false;
-                            englishBuffer = '';
-                            continue;
-                        } else if (line === '[Translating response to Chinese...]') {
-                            inChineseSection = true;
-                            inEnglishSection = false;
-                            chineseBuffer = '';
-                            // Ensure we've saved the English content
-                            if (englishBuffer.trim() && !englishContentSet) {
-                                conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
-                                englishContentSet = true;
-                            }
-                            continue;
-                        } else if (line.startsWith('[中文翻译]:')) {
-                            inChineseSection = true;
-                            inEnglishSection = false;
-                            chineseBuffer = line.substring(5).trim();
-                            // Ensure we've saved the English content
-                            if (!englishContentSet) {
-                                conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
-                                englishContentSet = true;
-                            }
-                            continue;
-                        }
+                        // Decode the chunk of data
+                        const chunk = decoder.decode(value, { stream: true });
+                        buffer += chunk;
                         
-                        if (inEnglishSection) {
-                            englishBuffer += line + '\n';
-                            // Update content more frequently for English response
-                            conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
-                            englishContentSet = true;
-                        } else if (inChineseSection) {
-                            if (line === '') {
-                                // End of Chinese section
-                                inChineseSection = false;
-                                if (chineseBuffer.trim()) {
-                                    conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
+                        // Process each line (SSE format)
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            
+                            if (line.startsWith('data: ')) {
+                                const data = line.slice(6).trim();
+                                
+                                if (data === '[DONE]') {
+                                    // End of stream
+                                    break;
                                 }
-                                chineseBuffer = '';
+                                
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    if (parsed.error) {
+                                        throw new Error(parsed.error);
+                                    }
+                                    
+                                    if (parsed.content) {
+                                        const content = parsed.content;
+                                        
+                                        // Process the content based on the current section
+                                        if (content.startsWith('[English Model Response]')) {
+                                            inEnglishSection = true;
+                                            inChineseSection = false;
+                                            englishBuffer += content.substring(24); // Remove the prefix
+                                        } else if (content.startsWith('[中文翻译]')) {
+                                            inChineseSection = true;
+                                            inEnglishSection = false;
+                                            chineseBuffer = content.substring(5); // Remove the prefix
+                                            
+                                            // Ensure we've saved the English content
+                                            if (!englishContentSet && englishBuffer) {
+                                                conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                                englishContentSet = true;
+                                            }
+                                        } else if (inEnglishSection) {
+                                            englishBuffer += content;
+                                        } else if (inChineseSection) {
+                                            chineseBuffer += content;
+                                        }
+                                        
+                                        // Update the UI with the latest content
+                                        const now = Date.now();
+                                        if (now - lastRenderTime > RENDER_THROTTLE_MS) {
+                                            if (englishBuffer) {
+                                                conversationHistory[assistantMsgIndex].content = englishBuffer;
+                                            }
+                                            if (chineseBuffer) {
+                                                conversationHistory[assistantMsgIndex].chinese = chineseBuffer;
+                                            }
+                                            renderConversation();
+                                            lastRenderTime = now;
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing SSE data:', e);
+                                    // Continue processing other lines even if one fails
+                                }
                             } else {
-                                chineseBuffer += line + '\n';
+                                // Handle non-SSE formatted lines (legacy format)
+                                if (line.startsWith('[Translated query to English]:')) {
+                                    inEnglishSection = false;
+                                    inChineseSection = false;
+                                } else if (line === '[English Model Response]:') {
+                                    inEnglishSection = true;
+                                    inChineseSection = false;
+                                    englishBuffer = '';
+                                } else if (line === '[Translating response to Chinese...]') {
+                                    inChineseSection = true;
+                                    inEnglishSection = false;
+                                    chineseBuffer = '';
+                                    // Ensure we've saved the English content
+                                    if (englishBuffer.trim() && !englishContentSet) {
+                                        conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                        englishContentSet = true;
+                                    }
+                                } else if (line.startsWith('[中文翻译]:')) {
+                                    inChineseSection = true;
+                                    inEnglishSection = false;
+                                    chineseBuffer = line.substring(5).trim();
+                                    // Ensure we've saved the English content
+                                    if (!englishContentSet) {
+                                        conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                        englishContentSet = true;
+                                    }
+                                } else if (inEnglishSection) {
+                                    englishBuffer += line + '\n';
+                                    // Update content more frequently for English response
+                                    conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                    englishContentSet = true;
+                                } else if (inChineseSection) {
+                                    if (line === '') {
+                                        // End of Chinese section
+                                        inChineseSection = false;
+                                        if (chineseBuffer.trim()) {
+                                            conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
+                                        }
+                                        chineseBuffer = '';
+                                    } else {
+                                        chineseBuffer += line + '\n';
+                                    }
+                                }
                             }
                         }
                     }
                     
-                    // Throttle rendering to improve performance
-                    const now = Date.now();
-                    if (now - lastRenderTime > RENDER_THROTTLE_MS) {
-                        // Only update UI if we have new content to show
-                        if (englishBuffer.trim() || chineseBuffer.trim()) {
-                            renderConversation();
-                            lastRenderTime = now;
+                    // Process any remaining data in the buffer
+                    if (buffer.trim()) {
+                        if (inEnglishSection) {
+                            englishBuffer += buffer.trim();
+                        } else if (inChineseSection) {
+                            chineseBuffer += buffer.trim();
                         }
                     }
+                    
+                    // Final update with any remaining content
+                    if (chineseBuffer.trim()) {
+                        conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
+                    }
+                    
+                    // Ensure we have the final English content
+                    if (englishBuffer.trim() && !englishContentSet) {
+                        conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                        englishContentSet = true;
+                    }
+                    
+                    // Save conversation
+                    saveConversation();
+                    
+                    // Final render
+                    renderConversation();
+                    
+                } catch (error) {
+                    console.error('Error processing stream:', error);
+                    conversationHistory[assistantMsgIndex].content = `Error: ${error.message}`;
+                    renderConversation();
+                    throw error; // Re-throw to be caught by the outer catch
                 }
-                
-                // Final update with any remaining content
-                if (chineseBuffer.trim()) {
-                    conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
-                }
-                
-                // Ensure we have the final English content
-                if (englishBuffer.trim() && !englishContentSet) {
-                    conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
-                }
-                
-                // Save conversation
-                saveConversation();
-                
-                // Final render
-                renderConversation();
-                
-            } catch (error) {
-                console.error('Error:', error);
-                conversationHistory[assistantMsgIndex].content = `Error: ${error.message}`;
-                renderConversation();
             } finally {
                 btnToDisable.textContent = 'Send';
                 btnToDisable.disabled = false;

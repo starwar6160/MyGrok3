@@ -261,16 +261,42 @@ def api_process_with_english_model():
                     stream=True  # Enable streaming for back translation
                 )
                 
-                # Stream the response chunks
-                for chunk in back_translate_response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
+                # Stream the response chunks with proper error handling
+                try:
+                    for chunk in back_translate_response:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            yield content
+                except Exception as e:
+                    yield f"\n\n[Translation error: {str(e)}]\n\n"
                 
         except Exception as e:
             yield f"Error: {str(e)}"
     
     if stream_mode:
-        return Response(stream_with_context(generate()), mimetype='text/plain')
+        # Use proper SSE format for streaming
+        def generate_sse():
+            try:
+                for chunk in generate():
+                    # Ensure each chunk is properly formatted as SSE data
+                    yield f"data: {json.dumps({'content': chunk})}\n\n"
+                # Send a final [DONE] message to indicate completion
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                error_msg = f"Error in stream: {str(e)}"
+                yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                yield "data: [DONE]\n\n"
+        
+        return Response(
+            generate_sse(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+                'Content-Type': 'text/event-stream; charset=utf-8'
+            }
+        )
     else:
         response_text = "".join(list(generate()))
         return jsonify({'response': response_text})
