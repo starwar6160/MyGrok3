@@ -309,6 +309,23 @@
             localStorage.setItem('translation_lastInput', document.getElementById('userInput').value);
         }
         
+        // Function to escape HTML special characters
+        function escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Function to convert newlines to <br> tags and preserve other HTML
+        function nl2br(str) {
+            if (!str) return '';
+            return str.replace(/\n/g, '<br>');
+        }
+
         // Function to render a single message with translations
         function renderMessage(msg) {
             const msgDiv = document.createElement('div');
@@ -316,11 +333,14 @@
             msgDiv.style.padding = '12px';
             msgDiv.style.borderRadius = '8px';
             
+            // Escape and process message content
+            const safeContent = nl2br(escapeHtml(msg.content || ''));
+            
             if (msg.role === 'user') {
                 // User message styling
                 msgDiv.style.backgroundColor = '#e3f2fd';
                 msgDiv.style.marginRight = '20%';
-                msgDiv.innerHTML = `<strong>You:</strong> ${msg.content}`;
+                msgDiv.innerHTML = `<strong>You:</strong> ${safeContent}`;
                 
                 // Show English translation if available (for Chinese input)
                 if (msg.english) {
@@ -335,7 +355,7 @@
                 // Assistant message styling
                 msgDiv.style.backgroundColor = '#f5f5f5';
                 msgDiv.style.marginLeft = '20%';
-                msgDiv.innerHTML = `<strong>Assistant:</strong> ${msg.content}`;
+                msgDiv.innerHTML = `<strong>Assistant:</strong> ${safeContent}`;
                 
                 // Show Chinese translation if available
                 if (msg.chinese) {
@@ -345,7 +365,7 @@
                     chineseDiv.style.backgroundColor = '#f0f8ff';
                     chineseDiv.style.borderRadius = '6px';
                     chineseDiv.style.borderLeft = '3px solid #3498db';
-                    chineseDiv.innerHTML = `<strong style="color: #2c3e50;">[中文]</strong> ${msg.chinese}`;
+                    chineseDiv.innerHTML = `<strong style="color: #2c3e50;">[中文]</strong> ${nl2br(escapeHtml(msg.chinese))}`;
                     msgDiv.appendChild(chineseDiv);
                 }
             }
@@ -562,6 +582,7 @@
                                             throw new Error(parsed.error);
                                         }
                                         if (parsed.content) {
+                                            // Append all content as normal text (including diagnostics)
                                             translatedTextArea.value += parsed.content;
                                             translatedTextArea.scrollTop = translatedTextArea.scrollHeight;
                                         }

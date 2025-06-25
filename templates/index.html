@@ -276,17 +276,17 @@
   <div class="main">
     <div class="chat">
       <template x-for="msg in getCurrentConversation().messages" :key="msg.timestamp">
-  <template x-if="msg.role === 'user'">
-    <p class="user" x-text="'Q: ' + msg.content"></p>
-  </template>
-  <template x-if="msg.role === 'assistant'">
-    <div class="pre-code-box">
-      <span class="ai-label">A:</span>
-      <span class="ai-content" x-text="msg.content"></span>
-      <button class="copy-btn" @click="$clipboard(msg.content)" title="复制">📋</button>
-    </div>
-  </template>
-</template>
+        <template x-if="msg.role === 'user'">
+          <p class="user" x-text="'Q: ' + msg.content"></p>
+        </template>
+        <template x-if="msg.role === 'assistant'">
+          <div class="pre-code-box">
+            <span class="ai-label">A:</span>
+            <div class="ai-content" x-html="formatMessage(msg.content)"></div>
+            <button class="copy-btn" @click="$clipboard(msg.content)" title="复制">📋</button>
+          </div>
+        </template>
+      </template>
     </div>
     <div class="form-fixed-bottom">
       <div class="form">
@@ -316,8 +316,26 @@
   </div>
 
   <script>
+    // Function to format message content with proper HTML escaping and line breaks
+    function formatMessage(content) {
+      if (!content) return '';
+      
+      // Escape HTML to prevent XSS
+      const escaped = content
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+      
+      // Convert newlines to <br> and preserve other whitespace
+      return escaped.replace(/\n/g, '<br>');
+    }
+
     function chatApp() {
       return {
+        // Make formatMessage available in the template
+        formatMessage,
         conversations: [],
         currentId: null,
         question: '',

@@ -1,8 +1,13 @@
 import os
 import json
-from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context
+import tiktoken
+from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context, g
 import openai
 from datetime import datetime, timedelta
+from response_utils import CostTracker, get_token_count, estimate_cost
+
+# Initialize cost tracker for translation API
+translation_cost_tracker = CostTracker()
 
 # Create a Blueprint for translation routes
 translation_bp = Blueprint('translation', __name__)
@@ -21,8 +26,8 @@ client = openai.OpenAI(
 # Model A: For translation between Chinese and English
 TRANSLATION_MODEL = "google/gemini-flash-1.5-8b"  # More literal, instruction-following model for translation
 # Model B: English-only model
-ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
-#ENGLISH_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"  # Handles English content only
+#ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
+ENGLISH_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"  # Handles English content only
 
 
 # Route to serve the translation page
@@ -75,8 +80,10 @@ def api_translate():
                         stream=True
                     )
                     
-                    # Buffer to accumulate content
+                    # Buffers for content and tracking
                     buffer = ""
+                    input_tokens = sum(get_token_count(msg.get('content', '')) for msg in messages)
+                    output_tokens = 0
                     
                     for chunk in response:
                         if not chunk.choices:
@@ -86,10 +93,29 @@ def api_translate():
                         if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
                             content = chunk.choices[0].delta.content
                             buffer += content
+                            output_tokens = get_token_count(buffer)  # Update output token count
                             
                             # Yield the content as it comes
                             yield f"data: {json.dumps({'content': content})}\n\n"
                     
+                    # Calculate final token counts and costs
+                    output_tokens = get_token_count(buffer)
+                    estimated_cost = estimate_cost(TRANSLATION_MODEL, input_tokens, output_tokens)
+                    
+                    # Update cost tracker
+                    translation_cost_tracker.update(input_tokens, output_tokens, estimated_cost)
+                    
+                    # After streaming content, send the diagnostics as a final, separate chunk
+                    diagnostics = translation_cost_tracker.get_diagnostic_info(
+                        model_name=TRANSLATION_MODEL,
+                        input_text=text,
+                        output_text=buffer,
+                        is_debug=True
+                    )
+                    if diagnostics:
+                        diag_content = f"\n\n---\n{diagnostics}"
+                        yield f"data: {json.dumps({'content': diag_content}, ensure_ascii=False)}\n\n"
+
                     # Send a final message to indicate completion
                     yield "data: [DONE]\n\n"
                     
@@ -134,10 +160,36 @@ def api_translate():
             )
             
             translated_text = response.choices[0].message.content
+            
+            # Calculate tokens and costs
+            input_tokens = sum(get_token_count(msg.get('content', '')) for msg in messages)
+            output_tokens = get_token_count(translated_text)
+            estimated_cost = estimate_cost(TRANSLATION_MODEL, input_tokens, output_tokens)
+            
+            # Update cost tracker
+            translation_cost_tracker.update(input_tokens, output_tokens, estimated_cost)
+            
+            # Get diagnostic info
+            diagnostics = translation_cost_tracker.get_diagnostic_info(
+                model_name=TRANSLATION_MODEL,
+                input_text='',  # Don't include input in response
+                output_text=translated_text,
+                is_debug=True
+            )
+            
+            # Add diagnostics to response
+            translated_text_with_diag = f"{translated_text}\n\n---\n{diagnostics}"
+            
             return jsonify({
-                'translated_text': translated_text,
+                'translated_text': translated_text_with_diag,
                 'source_lang': source_lang,
-                'target_lang': target_lang
+                'target_lang': target_lang,
+                'diagnostics': {
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'estimated_cost': estimated_cost,
+                    'cumulative_cost': translation_cost_tracker.total_cost
+                }
             })
         
     except Exception as e:

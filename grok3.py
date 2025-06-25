@@ -3,9 +3,10 @@ import os
 import hashlib
 import json
 import tiktoken
-from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
+from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
 from translation_api import init_translation_api
+from response_utils import CostTracker, get_token_count, with_diagnostics
 
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="templates")
@@ -185,11 +186,24 @@ def ensure_openrouter_models():
 
 # 计算请求成本
 def estimate_cost(model_name, input_tokens, output_tokens):
+    """
+    Estimate the cost of a request in dollars.
+    
+    Args:
+        model_name: Name of the model
+        input_tokens: Number of input tokens
+        output_tokens: Number of output tokens
+        
+    Returns:
+        float: Estimated cost in dollars
+    """
     ensure_openrouter_models()
     price_dict = openrouter_models_cache.get('price_dict', {})
     price = price_dict.get(model_name)
     if price:
-        return input_tokens * price['input'] + output_tokens * price['output']
+        input_cost = (input_tokens / 1_000_000) * price.get('input', 0)
+        output_cost = (output_tokens / 1_000_000) * price.get('output', 0)
+        return input_cost + output_cost
     return 0.0
 
 # 获取1M输出token的价格
@@ -461,17 +475,27 @@ def api_title_summary():
     return jsonify({"title": title or "新会话"})
 
 @app.route("/api/chat", methods=["POST"])
+@with_diagnostics(model_name_key='model', is_debug=True)  # Enable debug mode to always show diagnostics
 def api_chat():
+    # Initialize cost tracker for this request
+    if 'cost_tracker' not in g:
+        g.cost_tracker = CostTracker()
+    
+    # Get request data
+    data = request.get_json()
+    question = data.get('question', '')
+    selected_model = data.get('model', 'gpt-3.5-turbo')
+    history = data.get('history', [])
+    conversation_id = data.get('conversation_id', 'unknown')
+    
     if DEBUG_MESSAGES:
         # 仅打印有限的消息信息，不打印完整历史记录
-        debug_data = {}
-        if isinstance(data, dict):
-            debug_data = {
-                'question_length': len(question) if isinstance(question, str) else 0,
-                'model': selected_model,
-                'history_length': len(history) if isinstance(history, list) else 0,
-                'conversation_id': conversation_id
-            }
+        debug_data = {
+            'question_length': len(question) if isinstance(question, str) else 0,
+            'model': selected_model,
+            'history_length': len(history) if isinstance(history, list) else 0,
+            'conversation_id': conversation_id
+        }
         print('[FLASK] /api/chat received:', debug_data)
     try:
         data = request.get_json()
@@ -515,19 +539,27 @@ def api_chat():
         print(f"[api_chat] history_count={len(history)}")
     def generate():
         full_answer = ''
-        model_name = selected_model # Capture the model name
+        model_name = selected_model  # Capture the model name
         total_tokens = 0
-        # 会话累计成本缓存（放在闭包外，防止多次请求时丢失）
-        if not hasattr(generate, 'session_total_cost'):
-            generate.session_total_cost = 0.0
-
+        input_tokens = 0
+        output_tokens = 0
+        cost_tracker = CostTracker()  # Create a new cost tracker for this response
+        
+        # Calculate input tokens from messages
         try:
+            input_tokens = sum(
+                get_token_count(msg.get('content', '')) 
+                for msg in messages if isinstance(msg, dict)
+            )
+            
             response = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
                 stream=True
             )
             last_content = None
+            
+            # Process streaming response
             for chunk in response:
                 if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
@@ -535,72 +567,40 @@ def api_chat():
                     if last_content is not None:
                         yield last_content
                     last_content = content
-            # 只yield最后一条统计和警告
+            
+            # Yield the last content chunk if it exists
             if last_content is not None:
                 yield last_content
             
-            # Manual token counting using tiktoken
-            import tiktoken
-
-            try:
-                encoding = tiktoken.encoding_for_model(model_name)
-            except KeyError:
-                encoding = tiktoken.get_encoding("cl100k_base") # Fallback for unknown models
-
-            # Calculate input tokens
-            input_tokens = 0
-            for message in messages:
-                input_tokens += len(encoding.encode(message.get('content', '')))
-                input_tokens += 4 # Every message follows <im_start>{role/name}\n{content}<im_end>\n
-            input_tokens += 2 # Every reply starts with <im_start>assistant\n
-            # Calculate output tokens
-            output_tokens = len(encoding.encode(full_answer))
+            # Calculate tokens and costs after streaming completes
+            output_tokens = get_token_count(full_answer)
             total_tokens = input_tokens + output_tokens
-
-            # === 成本估算与高价警告 ===
             estimated_cost = estimate_cost(model_name, input_tokens, output_tokens)
-            output_cost_per_1m = get_1m_output_cost(model_name)
-            # 累加本会话成本
-            generate.session_total_cost += estimated_cost
-            warning_msg = ''
-            warning_threshold = 0.05  # 单次请求警告阈值（美元）
-            output_1m_threshold = 0.5  # 1M输出token高价阈值
-            if estimated_cost > warning_threshold or output_cost_per_1m >= output_1m_threshold:
-                # 新逻辑：随机推荐2个非free且输出成本<0.3美元的模型
-                import random
-                ensure_openrouter_models()
-                price_dict = openrouter_models_cache.get('price_dict', {})
-                # 强制转为float，过滤无效或异常数据，确保只推荐真实低价模型
-                candidates = []
-                for m, v in price_dict.items():
-                    try:
-                        if (
-                            isinstance(v, dict)
-                            and 'output' in v
-                            and v['output'] is not None
-                            and 'free' not in m
-                            and m != model_name
-                        ):
-                            output_cost = float(v['output'])
-                            if (output_cost * 1_000_000) < 0.3:
-                                candidates.append(m)
-                    except Exception:
-                        continue
-
-                random.shuffle(candidates)
-                cheaper = candidates[:2]
-                cheaper_str = '、'.join(cheaper) if cheaper else ''
-                if output_cost_per_1m >= output_1m_threshold:
-                    warning_msg = f"\n\n成本提示：当前模型输出成本较高，1M token 约 {output_cost_per_1m:.2f} 美元。"
-                else:
-                    warning_msg = f"\n\n请注意：本次对话预计输出成本较高（约 {estimated_cost:.8f} 美元）。"
-                if cheaper_str:
-                    warning_msg += f" 如需节省成本，请考虑切换到 {cheaper_str}。"
-            # 新增累计成本输出（单位：美分）
-            total_cost_cents = generate.session_total_cost * 100
-            total_cost_msg = f"\n本会话累计成本：约 {total_cost_cents:.2f} 美分" if total_cost_cents > 0.1 else ""
-            # 只在最后输出一次统计和警告
-            yield f"\n\n(Model: {model_name}, Tokens: {total_tokens}){warning_msg}{total_cost_msg}\n"
+            
+            # Update cost tracker
+            cost_tracker.update(input_tokens, output_tokens, estimated_cost)
+            
+            # Always generate diagnostic info for the response
+            diagnostics = cost_tracker.get_diagnostic_info(
+                model_name=model_name,
+                input_text='',  # Don't include full text in streaming
+                output_text=full_answer,
+                is_debug=True  # Always include full diagnostics
+            )
+            if diagnostics:
+                # Add a clear separator and the diagnostics
+                yield f"\n\n---\n{diagnostics}"
+                
+                # Also log the diagnostics for debugging
+                if DEBUG_MESSAGES:
+                    print(f"[DIAGNOSTICS] {diagnostics}")
+        
+        except Exception as e:
+            error_msg = f"Error in generate(): {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            yield error_msg
 
         except openai.NotFoundError as e:
             yield f"API Error: {e}"
