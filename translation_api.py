@@ -83,6 +83,7 @@ def api_process_with_english_model():
     data = request.json
     user_input = data.get('text', '')
     stream_mode = data.get('stream', False)
+    conversation_history = data.get('history', [])
     
     if not user_input:
         return jsonify({'error': 'No input provided'}), 400
@@ -112,12 +113,33 @@ def api_process_with_english_model():
                 if stream_mode:
                     yield f"[Translated query to English]: {translated_input}\n\n"
             
-            # Step 2: Process with English-only model (Model B)
+            # Prepare conversation history
             english_messages = [
-                {"role": "system", "content": "You are a helpful assistant that only responds in English."},
-                {"role": "user", "content": translated_input}
+                {"role": "system", "content": "You are a helpful assistant that only responds in English."}
             ]
             
+            # Add conversation history if available
+            for msg in conversation_history:
+                if msg['role'] == 'user' and contains_chinese:
+                    # If the original message was in Chinese, use the translated version
+                    translate_hist_msg = [
+                        {"role": "system", "content": "You are an expert translator. Translate the following message to English."},
+                        {"role": "user", "content": msg['content']}
+                    ]
+                    hist_translate = client.chat.completions.create(
+                        model=TRANSLATION_MODEL,
+                        messages=translate_hist_msg,
+                        max_tokens=1000,
+                        temperature=0.3
+                    )
+                    english_messages.append({"role": "user", "content": hist_translate.choices[0].message.content})
+                else:
+                    english_messages.append({"role": msg['role'], "content": msg['content']})
+            
+            # Add current user input
+            english_messages.append({"role": "user", "content": translated_input})
+            
+            # Process with English model
             response = client.chat.completions.create(
                 model=ENGLISH_MODEL,
                 messages=english_messages,

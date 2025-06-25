@@ -6,11 +6,56 @@
     <title>Translation Tool</title>
     <style>
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
             margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
+            padding: 20px;
             color: #333;
+        }
+        
+        /* Collapsible section styles */
+        .conversation-group {
+            margin-bottom: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .group-header {
+            background-color: #f5f5f5;
+            padding: 8px 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+            user-select: none;
+        }
+        
+        .group-header:hover {
+            background-color: #eeeeee;
+        }
+        
+        .group-header .toggle-icon {
+            transition: transform 0.2s;
+        }
+        
+        .group-header.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        
+        .group-messages {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        
+        .group-messages.expanded {
+            max-height: 5000px; /* Adjust based on your needs */
+        }
+        
+        .message-wrapper {
+            padding: 10px 15px;
         }
         .container {
             max-width: 1200px;
@@ -200,23 +245,30 @@
             </div>
 
             <div id="english-model" class="tab-content">
+                <div class="conversation-container" id="conversationContainer" style="margin-bottom: 15px; max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 4px; background: #f9f9f9;">
+                    <!-- Conversation history will be displayed here -->
+                </div>
+                
                 <div class="text-area-container">
-                    <textarea id="userInput" placeholder="Enter your prompt in English or Chinese..."></textarea>
+                    <textarea id="userInput" placeholder="Enter your message in English or Chinese..." style="width: 100%; min-height: 100px;"></textarea>
                 </div>
 
-                <div class="control-panel">
+                <div class="control-panel" style="margin-top: 10px;">
                     <div class="model-info">
                         Using <strong>Model B (English-only)</strong> with automatic translation wrapper
                     </div>
                     <div>
-                        <button id="streamBtn" class="button">Process</button>
-                        <button id="cleanEnglishBtn" class="button secondary" style="margin-left:8px;">Clean</button>
+                        <button id="streamBtn" class="button">Send</button>
+                        <button id="cleanEnglishBtn" class="button secondary" style="margin-left:8px;">New Chat</button>
                     </div>
                 </div>
-
-                <div id="englishModelOutput">Result will appear here...</div>
-<div id="englishChineseOutput" style="color:#2d7a0a; margin-top:8px; font-weight:bold;"></div>
-<div id="englishOutputNotice" style="color:#d35400; margin-top:8px; display:none; font-weight:bold;"></div>
+                
+                <!-- Status indicators -->
+                <div id="statusIndicator" style="margin-top: 10px; display: none; color: #666; font-style: italic;">
+                    Processing...
+                </div>
+                <div id="englishChineseOutput" style="color:#2d7a0a; margin-top:8px; font-weight:bold; display: none;"></div>
+                <div id="englishOutputNotice" style="color:#d35400; margin-top:8px; display:none; font-weight:bold;"></div>
             </div>
         </div>
     </div>
@@ -248,83 +300,135 @@
         document.getElementById('sourceLang').addEventListener('change', e => localStorage.setItem('translation_sourceLang', e.target.value));
         document.getElementById('targetLang').addEventListener('change', e => localStorage.setItem('translation_targetLang', e.target.value));
 
-        // === Local Storage for English Model Wrapper ===
-        document.getElementById('userInput').value = localStorage.getItem('translation_userInput') || '';
+        // === Conversation Management ===
+        let conversationHistory = JSON.parse(localStorage.getItem('translation_conversation') || '[]');
         
-        // Restore English output
-        const savedEnglish = localStorage.getItem('translation_englishModelOutput');
-        if (savedEnglish !== null) {
-            document.getElementById('englishModelOutput').textContent = savedEnglish;
-        } else {
-            document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
-            localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
+        // Function to save conversation to localStorage
+        function saveConversation() {
+            localStorage.setItem('translation_conversation', JSON.stringify(conversationHistory));
+            localStorage.setItem('translation_lastInput', document.getElementById('userInput').value);
         }
         
-        // Restore Chinese translation if it exists
-        const savedChinese = localStorage.getItem('translation_chineseOutput');
-        if (savedChinese) {
-            document.getElementById('englishChineseOutput').textContent = savedChinese;
+        // Function to render a single message with translations
+        function renderMessage(msg) {
+            const msgDiv = document.createElement('div');
+            msgDiv.style.marginBottom = '10px';
+            msgDiv.style.padding = '12px';
+            msgDiv.style.borderRadius = '8px';
+            
+            if (msg.role === 'user') {
+                // User message styling
+                msgDiv.style.backgroundColor = '#e3f2fd';
+                msgDiv.style.marginRight = '20%';
+                msgDiv.innerHTML = `<strong>You:</strong> ${msg.content}`;
+                
+                // Show English translation if available (for Chinese input)
+                if (msg.english) {
+                    const englishDiv = document.createElement('div');
+                    englishDiv.style.marginTop = '5px';
+                    englishDiv.style.color = '#1a5276';
+                    englishDiv.style.fontStyle = 'italic';
+                    englishDiv.textContent = `[EN] ${msg.english}`;
+                    msgDiv.appendChild(englishDiv);
+                }
+            } else {
+                // Assistant message styling
+                msgDiv.style.backgroundColor = '#f5f5f5';
+                msgDiv.style.marginLeft = '20%';
+                msgDiv.innerHTML = `<strong>Assistant:</strong> ${msg.content}`;
+                
+                // Show Chinese translation if available
+                if (msg.chinese) {
+                    const chineseDiv = document.createElement('div');
+                    chineseDiv.style.marginTop = '8px';
+                    chineseDiv.style.padding = '8px';
+                    chineseDiv.style.backgroundColor = '#f0f8ff';
+                    chineseDiv.style.borderRadius = '6px';
+                    chineseDiv.style.borderLeft = '3px solid #3498db';
+                    chineseDiv.innerHTML = `<strong style="color: #2c3e50;">[中文]</strong> ${msg.chinese}`;
+                    msgDiv.appendChild(chineseDiv);
+                }
+            }
+            
+            return msgDiv;
         }
-        document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
+        
+        // Function to render conversation history
+        function renderConversation() {
+            const container = document.getElementById('conversationContainer');
+            container.innerHTML = '';
+            
+            // If no messages, show a welcome message
+            if (conversationHistory.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Start a new conversation by typing a message below</div>';
+                return;
+            }
+            
+            // Render all messages in a simple list
+            conversationHistory.forEach(msg => {
+                const msgWrapper = document.createElement('div');
+                msgWrapper.className = 'message-wrapper';
+                
+                // Use the renderMessage function to create the message div
+                const msgDiv = renderMessage(msg);
+                msgWrapper.appendChild(msgDiv);
+                container.appendChild(msgWrapper);
+            });
+            
+            // Auto-scroll to bottom
+            if (container.scrollHeight > container.clientHeight) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+        
+        // Initialize conversation
+        renderConversation();
+        document.getElementById('userInput').value = localStorage.getItem('translation_lastInput') || '';
 
         function checkEnglishOutputNotice() {
-            const output = document.getElementById('englishModelOutput').textContent.trim();
-            const notice = document.getElementById('englishOutputNotice');
-            notice.textContent = '';
-            notice.style.display = 'none';
+            // This function is no longer needed as we're using a conversation-based UI
+            // Keeping it as a no-op to prevent errors from any remaining calls
+            return;
         }
 
         async function maybeTranslateEnglishOutput() {
-            const output = document.getElementById('englishModelOutput').textContent.trim();
-            const chineseDiv = document.getElementById('englishChineseOutput');
-            chineseDiv.textContent = '';
-            if (output && /[a-zA-Z]/.test(output) && !/[\u4e00-\u9fa5]/.test(output)) {
-                chineseDiv.textContent = '（正在翻译为中文...）';
-                try {
-                    const resp = await fetch('/translation/api/translate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: output, source_lang: 'en', target_lang: 'zh' })
-                    });
-                    const data = await resp.json();
-                    if (data.error) {
-                        chineseDiv.textContent = '翻译失败: ' + data.error;
-                    } else {
-                        const translatedText = data.translated_text;
-                        chineseDiv.textContent = translatedText;
-                        // Save the Chinese translation to local storage
-                        localStorage.setItem('translation_chineseOutput', translatedText);
-                    }
-                } catch (e) {
-                    chineseDiv.textContent = '翻译失败: ' + e.message;
-                }
-            } else {
-                chineseDiv.textContent = '';
-            }
+            // This function is no longer needed as we're handling translations in the backend
+            // Keeping it as a no-op to prevent errors from any remaining calls
+            return;
         }
 
         function saveEnglishModelOutput() {
-            const englishOutput = document.getElementById('englishModelOutput').textContent;
-            localStorage.setItem('translation_englishModelOutput', englishOutput);
-            
-            // Save Chinese translation if it exists
-            const chineseOutput = document.getElementById('englishChineseOutput').textContent;
-            if (chineseOutput) {
-                localStorage.setItem('translation_chineseOutput', chineseOutput);
-            }
-            
-            checkEnglishOutputNotice();
-            maybeTranslateEnglishOutput();
+            // This function is no longer needed as we're using saveConversation()
+            // Keeping it as a no-op to prevent errors from any remaining calls
+            return;
         }
 
         document.getElementById('cleanEnglishBtn').addEventListener('click', function() {
-            document.getElementById('userInput').value = '';
-            document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
-            document.getElementById('englishChineseOutput').textContent = '';
-            
-            localStorage.setItem('translation_userInput', '');
-            localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
-            localStorage.removeItem('translation_chineseOutput');
+            if (confirm('Start a new conversation? The current conversation will be cleared.')) {
+                // Clear conversation history
+                conversationHistory = [];
+                
+                // Clear input and output
+                document.getElementById('userInput').value = '';
+                document.getElementById('englishChineseOutput').textContent = '';
+                document.getElementById('englishChineseOutput').style.display = 'none';
+                
+                // Update UI
+                renderConversation();
+                saveConversation();
+                
+                // Clear local storage
+                localStorage.removeItem('translation_conversation');
+                localStorage.removeItem('translation_lastInput');
+            }
+        });
+        
+        // Handle Enter key in input
+        document.getElementById('userInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                document.getElementById('streamBtn').click();
+            }
         });
         
         // Initialize and check notice on page load
@@ -384,63 +488,193 @@
         });
         
         async function processWithEnglishModel() {
-            const userInput = document.getElementById('userInput').value;
+            const userInput = document.getElementById('userInput').value.trim();
             
-            if (!userInput.trim()) {
-                alert('Please enter some text');
+            if (!userInput) {
+                alert('Please enter a message');
                 return;
             }
             
-            const outputDiv = document.getElementById('englishModelOutput');
-            const btnToDisable = document.getElementById('streamBtn');
-            const originalText = btnToDisable.textContent;
-            btnToDisable.innerHTML = 'Processing... <span class="loading"></span>';
-            btnToDisable.disabled = true;
+            // Add user message to conversation
+            conversationHistory.push({
+                role: 'user',
+                content: userInput,
+                timestamp: new Date().toISOString()
+            });
             
-            outputDiv.textContent = 'Processing...';
+            // Clear input
+            document.getElementById('userInput').value = '';
+            
+            // Update UI
+            renderConversation();
+            saveConversation();
+            
+            const btnToDisable = document.getElementById('streamBtn');
+            const statusIndicator = document.getElementById('statusIndicator');
+            const chineseOutput = document.getElementById('englishChineseOutput');
+            
+            // Disable UI during processing
+            btnToDisable.disabled = true;
+            btnToDisable.textContent = 'Sending...';
+            statusIndicator.style.display = 'block';
+            chineseOutput.style.display = 'none';
+            
+            // Prepare assistant message in conversation
+            const assistantMsgIndex = conversationHistory.push({
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString()
+            }) - 1;
             
             try {
                 const response = await fetch('/translation/api/process-with-english-model', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         text: userInput,
-                        stream: true
+                        stream: true,
+                        history: conversationHistory.slice(0, -2) // Exclude current messages
                     })
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`Server responded with status: ${response.status}`);
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                if (!response.body) {
+                    throw new Error('No response body');
                 }
                 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                outputDiv.textContent = '';
+                let output = '';
+                let chineseOutput = '';
+                let englishOutput = '';
                 
                 let buffer = '';
+                let inChineseSection = false;
+                let inEnglishSection = false;
+                let chineseBuffer = '';
+                let englishBuffer = '';
+                let englishContentSet = false;
+                let lastRenderTime = 0;
+                const RENDER_THROTTLE_MS = 100; // Throttle rendering to improve performance
+                
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
-                    buffer += decoder.decode(value, { stream: true });
-                    outputDiv.textContent = buffer;
-                    // Auto scroll to bottom
-                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Process the buffer line by line
+                    let lineEnd;
+                    while ((lineEnd = buffer.indexOf('\n')) !== -1) {
+                        const line = buffer.substring(0, lineEnd).trim();
+                        buffer = buffer.substring(lineEnd + 1);
+                        
+                        if (line.startsWith('[Translated query to English]:')) {
+                            // This is the English translation of the user's Chinese input
+                            inEnglishSection = false; // Stop any previous section
+                            const translation = line.substring('[Translated query to English]:'.length).trim();
+                            // Save the English translation to the user's message
+                            const userMsgIndex = conversationHistory.length - 2; // The user's message is second to last
+                            if (userMsgIndex >= 0 && conversationHistory[userMsgIndex].role === 'user') {
+                                conversationHistory[userMsgIndex].english = translation;
+                            }
+                            continue;
+                        } else if (line === '[English Model Response]:') {
+                            // This is the start of the English response
+                            inEnglishSection = true;
+                            inChineseSection = false;
+                            englishBuffer = '';
+                            continue;
+                        } else if (line === '[Translating response to Chinese...]') {
+                            inChineseSection = true;
+                            inEnglishSection = false;
+                            chineseBuffer = '';
+                            // Ensure we've saved the English content
+                            if (englishBuffer.trim() && !englishContentSet) {
+                                conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                englishContentSet = true;
+                            }
+                            continue;
+                        } else if (line.startsWith('[中文翻译]:')) {
+                            inChineseSection = true;
+                            inEnglishSection = false;
+                            chineseBuffer = line.substring(5).trim();
+                            // Ensure we've saved the English content
+                            if (!englishContentSet) {
+                                conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                                englishContentSet = true;
+                            }
+                            continue;
+                        }
+                        
+                        if (inEnglishSection) {
+                            englishBuffer += line + '\n';
+                            // Update content more frequently for English response
+                            conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                            englishContentSet = true;
+                        } else if (inChineseSection) {
+                            if (line === '') {
+                                // End of Chinese section
+                                inChineseSection = false;
+                                if (chineseBuffer.trim()) {
+                                    conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
+                                }
+                                chineseBuffer = '';
+                            } else {
+                                chineseBuffer += line + '\n';
+                            }
+                        }
+                    }
+                    
+                    // Throttle rendering to improve performance
+                    const now = Date.now();
+                    if (now - lastRenderTime > RENDER_THROTTLE_MS) {
+                        // Only update UI if we have new content to show
+                        if (englishBuffer.trim() || chineseBuffer.trim()) {
+                            renderConversation();
+                            lastRenderTime = now;
+                        }
+                    }
                 }
-                // Final decode to flush any remaining content
-                buffer += decoder.decode();
-                outputDiv.textContent = buffer;
-                saveEnglishModelOutput();
+                
+                // Final update with any remaining content
+                if (chineseBuffer.trim()) {
+                    conversationHistory[assistantMsgIndex].chinese = chineseBuffer.trim();
+                }
+                
+                // Ensure we have the final English content
+                if (englishBuffer.trim() && !englishContentSet) {
+                    conversationHistory[assistantMsgIndex].content = englishBuffer.trim();
+                }
+                
+                // Save conversation
+                saveConversation();
+                
+                // Final render
+                renderConversation();
+                
             } catch (error) {
-                outputDiv.textContent = 'Error: ' + error.message;
-                console.error('Streaming error:', error);
+                console.error('Error:', error);
+                conversationHistory[assistantMsgIndex].content = `Error: ${error.message}`;
+                renderConversation();
+            } finally {
+                btnToDisable.textContent = 'Send';
+                btnToDisable.disabled = false;
+                statusIndicator.style.display = 'none';
+                
+                // Show Chinese translation if available
+                if (conversationHistory[assistantMsgIndex].chinese) {
+                    chineseOutput.textContent = conversationHistory[assistantMsgIndex].chinese;
+                    chineseOutput.style.display = 'block';
+                }
+                
+                // Save conversation after all updates
+                saveConversation();
             }
-            
-            // Re-enable button
-            btnToDisable.disabled = false;
-            btnToDisable.textContent = originalText;
         }
     </script>
 </body>
