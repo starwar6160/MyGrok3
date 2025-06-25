@@ -249,10 +249,10 @@
         // === Local Storage for English Model Wrapper ===
         document.getElementById('userInput').value = localStorage.getItem('translation_userInput') || '';
         if (localStorage.getItem('translation_englishModelOutput') !== null) {
-    document.getElementById('englishModelOutput').textContent = localStorage.getItem('translation_englishModelOutput');
-} else {
-    document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
-}
+            document.getElementById('englishModelOutput').textContent = localStorage.getItem('translation_englishModelOutput');
+        } else {
+            document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+        }
         document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
 
         // Save output after translation (Direct Translation)
