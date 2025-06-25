@@ -19,9 +19,9 @@ client = openai.OpenAI(
 
 # Define models
 # Model A: For translation between Chinese and English
-TRANSLATION_MODEL = "openai/gpt-4.1-nano"  # More literal, instruction-following model for translation
+TRANSLATION_MODEL = "google/gemini-flash-1.5-8b"  # More literal, instruction-following model for translation
 # Model B: English-only model
-ENGLISH_MODEL = "openai/gpt-4o-mini"  # Handles English content only
+ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
 
 # Route to serve the translation page
 @translation_bp.route('/')

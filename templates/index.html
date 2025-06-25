@@ -245,9 +245,23 @@
   </style>
 </head>
 <body :style="`font-size: ${fontSize}px`">
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const sidebar = document.querySelector('.sidebar');
+      const translationBtn = document.querySelector('.sidebar a[href="/translation/"]');
+      console.log('[DEBUG] Sidebar DOM:', sidebar);
+      console.log('[DEBUG] 翻译工具按钮:', translationBtn);
+      console.log('[DEBUG] localStorage:', JSON.stringify(localStorage));
+      if (!translationBtn) {
+        console.warn('[DEBUG] 翻译工具按钮未渲染在DOM中!');
+      } else {
+        console.info('[DEBUG] 翻译工具按钮已渲染');
+      }
+    });
+  </script>
   <div class="sidebar">
     <button @click="addConversation()">＋ 新会话</button>
-    <a href="/translation/" style="display: block; text-align: center; margin-bottom: 8px; padding: 8px; background: #4a6fa5; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">翻译工具</a>
+    <a href="/translation/" style="display: block; text-align: center; margin-bottom: 12px; margin-top: 2px; padding: 8px; background: #ff9800; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 1.08em;">🈯 翻译工具</a>
     <div class="list">
       <template x-for="conv in conversations" :key="conv.id">
         <button
