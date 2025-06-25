@@ -234,6 +234,36 @@
             });
         });
 
+        // === Local Storage for Direct Translation ===
+        // Restore on load
+        document.getElementById('sourceText').value = localStorage.getItem('translation_sourceText') || '';
+        document.getElementById('translatedText').value = localStorage.getItem('translation_translatedText') || '';
+        document.getElementById('sourceLang').value = localStorage.getItem('translation_sourceLang') || 'auto';
+        document.getElementById('targetLang').value = localStorage.getItem('translation_targetLang') || 'en';
+        // Save on change
+        document.getElementById('sourceText').addEventListener('input', e => localStorage.setItem('translation_sourceText', e.target.value));
+        document.getElementById('translatedText').addEventListener('input', e => localStorage.setItem('translation_translatedText', e.target.value));
+        document.getElementById('sourceLang').addEventListener('change', e => localStorage.setItem('translation_sourceLang', e.target.value));
+        document.getElementById('targetLang').addEventListener('change', e => localStorage.setItem('translation_targetLang', e.target.value));
+
+        // === Local Storage for English Model Wrapper ===
+        document.getElementById('userInput').value = localStorage.getItem('translation_userInput') || '';
+        if (localStorage.getItem('translation_englishModelOutput') !== null) {
+    document.getElementById('englishModelOutput').textContent = localStorage.getItem('translation_englishModelOutput');
+} else {
+    document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+}
+        document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
+
+        // Save output after translation (Direct Translation)
+        function saveDirectTranslationOutput() {
+            localStorage.setItem('translation_translatedText', document.getElementById('translatedText').value);
+        }
+        // Save output after English Model Wrapper
+        function saveEnglishModelOutput() {
+            localStorage.setItem('translation_englishModelOutput', document.getElementById('englishModelOutput').textContent);
+        }
+
         // Direct translation functionality
         document.getElementById('translateBtn').addEventListener('click', async () => {
             const sourceText = document.getElementById('sourceText').value;
@@ -271,6 +301,7 @@
                 }
                 
                 document.getElementById('translatedText').value = data.translated_text;
+saveDirectTranslationOutput();
             } catch (error) {
                 alert('Translation failed: ' + error.message);
                 console.error('Translation error:', error);
@@ -366,6 +397,7 @@
                     }
                     
                     outputDiv.textContent = data.response;
+saveEnglishModelOutput();
                 } catch (error) {
                     outputDiv.textContent = 'Error: ' + error.message;
                     console.error('Processing error:', error);
