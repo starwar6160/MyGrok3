@@ -209,8 +209,7 @@
                         Using <strong>Model B (English-only)</strong> with automatic translation wrapper
                     </div>
                     <div>
-                        <button id="processBtn" class="button">Process</button>
-                        <button id="streamBtn" class="button secondary">Stream Response</button>
+                        <button id="streamBtn" class="button">Process</button>
                         <button id="cleanEnglishBtn" class="button secondary" style="margin-left:8px;">Clean</button>
                     </div>
                 </div>
@@ -251,11 +250,20 @@
 
         // === Local Storage for English Model Wrapper ===
         document.getElementById('userInput').value = localStorage.getItem('translation_userInput') || '';
-        if (localStorage.getItem('translation_englishModelOutput') !== null) {
-            document.getElementById('englishModelOutput').textContent = localStorage.getItem('translation_englishModelOutput');
+        
+        // Restore English output
+        const savedEnglish = localStorage.getItem('translation_englishModelOutput');
+        if (savedEnglish !== null) {
+            document.getElementById('englishModelOutput').textContent = savedEnglish;
         } else {
             document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
             localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
+        }
+        
+        // Restore Chinese translation if it exists
+        const savedChinese = localStorage.getItem('translation_chineseOutput');
+        if (savedChinese) {
+            document.getElementById('englishChineseOutput').textContent = savedChinese;
         }
         document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
 
@@ -282,7 +290,10 @@
                     if (data.error) {
                         chineseDiv.textContent = '翻译失败: ' + data.error;
                     } else {
-                        chineseDiv.textContent = data.translated_text;
+                        const translatedText = data.translated_text;
+                        chineseDiv.textContent = translatedText;
+                        // Save the Chinese translation to local storage
+                        localStorage.setItem('translation_chineseOutput', translatedText);
                     }
                 } catch (e) {
                     chineseDiv.textContent = '翻译失败: ' + e.message;
@@ -293,7 +304,15 @@
         }
 
         function saveEnglishModelOutput() {
-            localStorage.setItem('translation_englishModelOutput', document.getElementById('englishModelOutput').textContent);
+            const englishOutput = document.getElementById('englishModelOutput').textContent;
+            localStorage.setItem('translation_englishModelOutput', englishOutput);
+            
+            // Save Chinese translation if it exists
+            const chineseOutput = document.getElementById('englishChineseOutput').textContent;
+            if (chineseOutput) {
+                localStorage.setItem('translation_chineseOutput', chineseOutput);
+            }
+            
             checkEnglishOutputNotice();
             maybeTranslateEnglishOutput();
         }
@@ -301,9 +320,11 @@
         document.getElementById('cleanEnglishBtn').addEventListener('click', function() {
             document.getElementById('userInput').value = '';
             document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+            document.getElementById('englishChineseOutput').textContent = '';
+            
             localStorage.setItem('translation_userInput', '');
             localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
-            document.getElementById('englishChineseOutput').textContent = '';
+            localStorage.removeItem('translation_chineseOutput');
         });
         
         // Initialize and check notice on page load
@@ -357,16 +378,12 @@
             }
         });
         
-        // English model processing functionality
-        document.getElementById('processBtn').addEventListener('click', async () => {
-            await processWithEnglishModel(false);
-        });
-        
+        // English model processing with streaming
         document.getElementById('streamBtn').addEventListener('click', async () => {
-            await processWithEnglishModel(true);
+            await processWithEnglishModel();
         });
         
-        async function processWithEnglishModel(stream) {
+        async function processWithEnglishModel() {
             const userInput = document.getElementById('userInput').value;
             
             if (!userInput.trim()) {
@@ -375,84 +392,54 @@
             }
             
             const outputDiv = document.getElementById('englishModelOutput');
-            const btnToDisable = stream ? document.getElementById('streamBtn') : document.getElementById('processBtn');
+            const btnToDisable = document.getElementById('streamBtn');
             const originalText = btnToDisable.textContent;
-            btnToDisable.innerHTML = (stream ? 'Streaming...' : 'Processing...') + ' <span class="loading"></span>';
+            btnToDisable.innerHTML = 'Processing... <span class="loading"></span>';
             btnToDisable.disabled = true;
-            document.getElementById('processBtn').disabled = true;
-            document.getElementById('streamBtn').disabled = true;
             
             outputDiv.textContent = 'Processing...';
             
-            if (stream) {
-                try {
-                    const response = await fetch('/translation/api/process-with-english-model', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            text: userInput,
-                            stream: true
-                        })
-                    });
+            try {
+                const response = await fetch('/translation/api/process-with-english-model', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: userInput,
+                        stream: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server responded with status: ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                outputDiv.textContent = '';
+                
+                let buffer = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
                     
-                    if (!response.ok) {
-                        throw new Error(`Server responded with status: ${response.status}`);
-                    }
-                    
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    outputDiv.textContent = '';
-                    
-                    let buffer = '';
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        
-                        buffer += decoder.decode(value, { stream: true });
-                        outputDiv.textContent = buffer;
-                        // Auto scroll to bottom
-                        outputDiv.scrollTop = outputDiv.scrollHeight;
-                    }
-                    // Final decode to flush any remaining content
-                    buffer += decoder.decode();
+                    buffer += decoder.decode(value, { stream: true });
                     outputDiv.textContent = buffer;
-                    saveEnglishModelOutput();
-                } catch (error) {
-                    outputDiv.textContent = 'Error: ' + error.message;
-                    console.error('Streaming error:', error);
+                    // Auto scroll to bottom
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
                 }
-            } else {
-                try {
-                    const response = await fetch('/translation/api/process-with-english-model', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            text: userInput,
-                            stream: false
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.error) {
-                        throw new Error(data.error);
-                    }
-                    
-                    outputDiv.textContent = data.response;
-                    saveEnglishModelOutput();
-                } catch (error) {
-                    outputDiv.textContent = 'Error: ' + error.message;
-                    console.error('Processing error:', error);
-                }
+                // Final decode to flush any remaining content
+                buffer += decoder.decode();
+                outputDiv.textContent = buffer;
+                saveEnglishModelOutput();
+            } catch (error) {
+                outputDiv.textContent = 'Error: ' + error.message;
+                console.error('Streaming error:', error);
             }
             
-            // Re-enable buttons
-            document.getElementById('processBtn').disabled = false;
-            document.getElementById('streamBtn').disabled = false;
+            // Re-enable button
+            btnToDisable.disabled = false;
             btnToDisable.textContent = originalText;
         }
     </script>
