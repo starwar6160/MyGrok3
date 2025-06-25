@@ -211,6 +211,7 @@
                     <div>
                         <button id="processBtn" class="button">Process</button>
                         <button id="streamBtn" class="button secondary">Stream Response</button>
+                        <button id="cleanEnglishBtn" class="button secondary" style="margin-left:8px;">Clean</button>
                     </div>
                 </div>
 
@@ -254,6 +255,12 @@
             document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
         }
         document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
+    document.getElementById('cleanEnglishBtn').addEventListener('click', function() {
+        document.getElementById('userInput').value = '';
+        document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+        localStorage.setItem('translation_userInput', '');
+        localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
+    });
 
         // Save output after translation (Direct Translation)
         function saveDirectTranslationOutput() {
