@@ -216,6 +216,8 @@
                 </div>
 
                 <div id="englishModelOutput">Result will appear here...</div>
+<div id="englishChineseOutput" style="color:#2d7a0a; margin-top:8px; font-weight:bold;"></div>
+<div id="englishOutputNotice" style="color:#d35400; margin-top:8px; display:none; font-weight:bold;"></div>
             </div>
         </div>
     </div>
@@ -253,23 +255,59 @@
             document.getElementById('englishModelOutput').textContent = localStorage.getItem('translation_englishModelOutput');
         } else {
             document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+            localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
         }
         document.getElementById('userInput').addEventListener('input', e => localStorage.setItem('translation_userInput', e.target.value));
-    document.getElementById('cleanEnglishBtn').addEventListener('click', function() {
-        document.getElementById('userInput').value = '';
-        document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
-        localStorage.setItem('translation_userInput', '');
-        localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
-    });
 
-        // Save output after translation (Direct Translation)
-        function saveDirectTranslationOutput() {
-            localStorage.setItem('translation_translatedText', document.getElementById('translatedText').value);
+        function checkEnglishOutputNotice() {
+            const output = document.getElementById('englishModelOutput').textContent.trim();
+            const notice = document.getElementById('englishOutputNotice');
+            notice.textContent = '';
+            notice.style.display = 'none';
         }
-        // Save output after English Model Wrapper
+
+        async function maybeTranslateEnglishOutput() {
+            const output = document.getElementById('englishModelOutput').textContent.trim();
+            const chineseDiv = document.getElementById('englishChineseOutput');
+            chineseDiv.textContent = '';
+            if (output && /[a-zA-Z]/.test(output) && !/[\u4e00-\u9fa5]/.test(output)) {
+                chineseDiv.textContent = '（正在翻译为中文...）';
+                try {
+                    const resp = await fetch('/translation/api/translate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: output, source_lang: 'en', target_lang: 'zh' })
+                    });
+                    const data = await resp.json();
+                    if (data.error) {
+                        chineseDiv.textContent = '翻译失败: ' + data.error;
+                    } else {
+                        chineseDiv.textContent = data.translated_text;
+                    }
+                } catch (e) {
+                    chineseDiv.textContent = '翻译失败: ' + e.message;
+                }
+            } else {
+                chineseDiv.textContent = '';
+            }
+        }
+
         function saveEnglishModelOutput() {
             localStorage.setItem('translation_englishModelOutput', document.getElementById('englishModelOutput').textContent);
+            checkEnglishOutputNotice();
+            maybeTranslateEnglishOutput();
         }
+
+        document.getElementById('cleanEnglishBtn').addEventListener('click', function() {
+            document.getElementById('userInput').value = '';
+            document.getElementById('englishModelOutput').textContent = 'Result will appear here...';
+            localStorage.setItem('translation_userInput', '');
+            localStorage.setItem('translation_englishModelOutput', 'Result will appear here...');
+            document.getElementById('englishChineseOutput').textContent = '';
+        });
+        
+        // Initialize and check notice on page load
+        checkEnglishOutputNotice();
 
         // Direct translation functionality
         document.getElementById('translateBtn').addEventListener('click', async () => {
@@ -308,7 +346,7 @@
                 }
                 
                 document.getElementById('translatedText').value = data.translated_text;
-saveDirectTranslationOutput();
+                saveDirectTranslationOutput();
             } catch (error) {
                 alert('Translation failed: ' + error.message);
                 console.error('Translation error:', error);
@@ -380,6 +418,7 @@ saveDirectTranslationOutput();
                     // Final decode to flush any remaining content
                     buffer += decoder.decode();
                     outputDiv.textContent = buffer;
+                    saveEnglishModelOutput();
                 } catch (error) {
                     outputDiv.textContent = 'Error: ' + error.message;
                     console.error('Streaming error:', error);
@@ -404,7 +443,7 @@ saveDirectTranslationOutput();
                     }
                     
                     outputDiv.textContent = data.response;
-saveEnglishModelOutput();
+                    saveEnglishModelOutput();
                 } catch (error) {
                     outputDiv.textContent = 'Error: ' + error.message;
                     console.error('Processing error:', error);
