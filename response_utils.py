@@ -5,10 +5,86 @@ from flask import g
 import tiktoken
 import json
 import time
+import threading
+from collections import defaultdict
 from functools import wraps
 
-# Global session storage for tracking costs across requests
-session_costs = {}
+# Global in-memory storage with thread lock
+session_data_lock = threading.Lock()
+session_store = defaultdict(dict)  # Format: {session_id: {'messages': [], 'cost_tracker': CostTracker, 'last_accessed': timestamp}}
+
+class CostTracker:
+    """Track token usage and costs across requests."""
+    
+    def __init__(self):
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cumulative_cost = 0.0
+    
+    def update(self, input_tokens=0, output_tokens=0, cost=0.0):
+        """Update token counts and cost with validation."""
+        if cost < 0:
+            print(f"[WARNING] Negative cost detected: {cost}, ignoring")
+            return
+            
+        # Atomic update with validation
+        new_cumulative = self.cumulative_cost + cost
+        if new_cumulative < self.cumulative_cost:
+            print(f"[ERROR] Cost would decrease from {self.cumulative_cost} to {new_cumulative}")
+            return
+            
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.cumulative_cost = new_cumulative
+        print(f"[COST_UPDATE] Added {cost:.6f}, New Cumulative: {self.cumulative_cost:.6f}")
+
+    def get_diagnostic_info(self, model_name, input_text='', output_text='', is_debug=True):
+        """Generate diagnostic string with model info and costs."""
+        try:
+            # Format cumulative cost
+            if self.cumulative_cost >= 0.01:
+                cost_str = f"{self.cumulative_cost:.2f}"
+            else:
+                cost_str = f"{self.cumulative_cost:.1e}"
+
+            diagnostics = f"Model:{model_name}|CurrentTokens:{self.input_tokens + self.output_tokens}|累计费用:{cost_str}美分"
+            print(f"[DIAGNOSTIC INFO] {diagnostics}")
+            return diagnostics
+        except Exception as e:
+            print(f"[ERROR] Failed to generate diagnostics: {e}")
+            return ""
+
+def get_session_data():
+    """Get or create session data for current request."""
+    if not hasattr(g, 'session_id'):
+        return None
+        
+    with session_data_lock:
+        session_id = g.session_id
+        if session_id not in session_store:
+            session_store[session_id] = {
+                'messages': [],
+                'cost_tracker': CostTracker(),
+                'last_accessed': time.time()
+            }
+        else:
+            session_store[session_id]['last_accessed'] = time.time()
+        return session_store[session_id]
+
+def cleanup_old_sessions(max_age_seconds=86400):
+    """Clean up old session data to prevent memory leaks."""
+    current_time = time.time()
+    with session_data_lock:
+        for session_id in list(session_store.keys()):
+            if current_time - session_store[session_id].get('last_accessed', 0) > max_age_seconds:
+                del session_store[session_id]
+
+# Initialize cleanup thread
+cleanup_thread = threading.Thread(
+    target=lambda: [time.sleep(3600), cleanup_old_sessions()],
+    daemon=True
+)
+cleanup_thread.start()
 
 def get_token_count(text, model="gpt-3.5-turbo"):
     """Get the number of tokens in a text string."""
@@ -40,88 +116,6 @@ def estimate_cost(model_name, input_tokens, output_tokens):
     
     return input_cost + output_cost
 
-class CostTracker:
-    """Track token usage and costs across requests."""
-    
-    def __init__(self):
-        self.input_tokens = 0
-        self.output_tokens = 0
-        self.start_time = time.time()
-        self.cumulative_cost = 0.0
-    
-    def update(self, input_tokens=0, output_tokens=0, cost=0.0):
-        """Update token counts and cost."""
-        self.input_tokens += input_tokens
-        self.output_tokens += output_tokens
-        self.cumulative_cost += cost
-    
-    def get_diagnostic_info(self, model_name, input_text, output_text, is_debug=True):
-        """Generate a concise, single-line diagnostic string with costs in cents (0.01 precision)."""
-        try:
-            input_tokens = get_token_count(input_text)
-            output_tokens = get_token_count(output_text)
-            total_tokens = input_tokens + output_tokens
-
-            model_price = {}
-            try:
-                from grok3 import openrouter_models_cache
-                price_dict = openrouter_models_cache.get('price_dict', {})
-                model_price = price_dict.get(model_name, {})
-                if not model_price and '/' in model_name:
-                    base_model = model_name.split('/')[-1]
-                    model_price = price_dict.get(base_model, {})
-            except ImportError:
-                pass  # openrouter_models_cache not available
-
-            if not model_price:
-                KNOWN_MODEL_PRICES = {
-                    'google/gemini-flash-1.5-8b': {'input': 0.10, 'output': 0.40},
-                    'gpt-3.5-turbo': {'input': 0.50, 'output': 1.50},
-                }
-                model_price = KNOWN_MODEL_PRICES.get(model_name, {'input': 0, 'output': 0})
-
-            def price_to_cents_per_million(val):
-                try:
-                    return float(val) * 1_000_000 * 100
-                except (ValueError, TypeError):
-                    return 0.0
-
-            input_price_cents = price_to_cents_per_million(model_price.get('input', 0))
-            output_price_cents = price_to_cents_per_million(model_price.get('output', 0))
-
-            total_cost_cents = ((input_tokens / 1_000_000) * input_price_cents) + \
-                               ((output_tokens / 1_000_000) * output_price_cents)
-            
-            self.cumulative_cost += total_cost_cents
-
-            if not is_debug and self.cumulative_cost < 0.1:
-                return ""
-
-            cost_info = f"|Cost:{total_cost_cents:.4f}¢" if total_cost_cents > 0.1 else ""
-            diagnostics = f"Model:{model_name}|Tokens:{total_tokens}{cost_info}"
-            diagnostics = diagnostics.replace(" ", "")
-
-            if output_price_cents > 100:
-                diagnostics += "|⚠️HighOutputPrice"
-            if input_price_cents > 100:
-                diagnostics += "|⚠️HighInputPrice"
-
-            print(f"[DIAGNOSTIC INFO] {diagnostics}")
-            return diagnostics
-
-        except Exception as e:
-            error_msg = f"Error generating diagnostics: {e}"
-            print(f"[ERROR] In get_diagnostic_info: {error_msg}")
-            return error_msg
-            
-        return diagnostics
-
-def get_cost_tracker():
-    """Get or create a cost tracker for the current session."""
-    if 'cost_tracker' not in g:
-        g.cost_tracker = CostTracker()
-    return g.cost_tracker
-
 def with_diagnostics(model_name_key='model', is_debug=False):
     """Decorator to add diagnostic information to responses."""
     def decorator(f):
@@ -145,24 +139,26 @@ def with_diagnostics(model_name_key='model', is_debug=False):
                 model_name = data.get(model_name_key, 'unknown')
                 
                 # Get or create cost tracker
-                cost_tracker = get_cost_tracker()
-                
-                # Add diagnostic info
-                diagnostics = cost_tracker.get_diagnostic_info(
-                    model_name=model_name,
-                    input_text=input_text,
-                    output_text=output_text,
-                    is_debug=is_debug
-                )
-                
-                if diagnostics:
-                    if isinstance(output_text, str):
-                        data['output'] = output_text + diagnostics
-                    elif isinstance(data.get('choices'), list) and data['choices']:
-                        if 'text' in data['choices'][0]:
-                            data['choices'][0]['text'] += diagnostics
-                        elif 'message' in data['choices'][0] and 'content' in data['choices'][0]['message']:
-                            data['choices'][0]['message']['content'] += diagnostics
+                session_data = get_session_data()
+                if session_data:
+                    cost_tracker = session_data['cost_tracker']
+                    
+                    # Add diagnostic info
+                    diagnostics = cost_tracker.get_diagnostic_info(
+                        model_name=model_name,
+                        input_text=input_text,
+                        output_text=output_text,
+                        is_debug=is_debug
+                    )
+                    
+                    if diagnostics:
+                        if isinstance(output_text, str):
+                            data['output'] = output_text + diagnostics
+                        elif isinstance(data.get('choices'), list) and data['choices']:
+                            if 'text' in data['choices'][0]:
+                                data['choices'][0]['text'] += diagnostics
+                            elif 'message' in data['choices'][0] and 'content' in data['choices'][0]['message']:
+                                data['choices'][0]['message']['content'] += diagnostics
                 
                 # Update the response
                 response.set_data(json.dumps(data))

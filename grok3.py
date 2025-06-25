@@ -7,9 +7,11 @@ from flask import Flask, render_template, request, Response, stream_with_context
 from pathlib import Path
 from translation_api import init_translation_api
 from response_utils import CostTracker, get_token_count, with_diagnostics
+import uuid
 
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="templates")
+app.secret_key = 'your_secret_key'  # Replace with a real secret key
 
 # 允许跨域
 try:
@@ -17,6 +19,14 @@ try:
     CORS(app)
 except ImportError:
     pass  # 如果没装CORS，先不报错
+
+# Before request handler to set session_id
+@app.before_request
+def before_request():
+    from flask import g, session
+    if 'session_id' not in session:
+        session['session_id'] = str(uuid.uuid4())
+    g.session_id = session['session_id']
 
 # Configure the OpenRouter API client
 openai_api_key = os.getenv("OPENAI_API_KEY")

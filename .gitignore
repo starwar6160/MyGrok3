@@ -4,3 +4,4 @@ chat_*.db
 data/*
 openrouter_model_prices.json
 static/*
+venv/*
