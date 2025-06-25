@@ -5,9 +5,10 @@ import json
 import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify
 from pathlib import Path
+from translation_api import init_translation_api
 
 # === React 静态页面托管 ===
-app = Flask(__name__, static_folder="frontend/build", template_folder="frontend/build")
+app = Flask(__name__, static_folder="frontend/build", template_folder="templates")
 
 # 允许跨域
 try:
@@ -31,18 +32,20 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
 
 #screen -D -r 2304929
-#USE_STABLE_MODELS=false FLASK_APP=grok3.py flask run -p 5003 -h 0.0.0.0
+#USE_STABLE_MODELS=false FLASK_APP=grok3.py flask run -p 5005 -h 0.0.0.0
 # Flag to switch between experimental and stable model lists
 USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 MODELS_EXPERIMENTAL = [        
     #能正确回答9.9和9.11哪一个大,正确讲解日语语法的模型：    
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40        
-    "google/gemma-3-12b-it",    #5/10
     #gemini-flash-1.5-8b很便宜，飞快，数字比较错误但是能准确讲解日语语法
-    "google/gemini-flash-1.5-8b",    #3.8/15    
+    "google/gemini-flash-1.5-8b",    #3.8/15            
+    "google/gemma-3-12b-it",    #5/10
+    "google/gemma-3-27b-it:free",    #10/19
+    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40        
+    "qwen/qwen3-32b:free",    #10/30
     "moonshotai/kimi-dev-72b:free",       
-    "deepseek/deepseek-r1-distill-llama-70b",   #10/40
+    "deepseek/deepseek-r1-distill-llama-70b:free",   #10/40
     "deepseek/deepseek-r1-0528:free",    #55/219    
     #一般经济型模型
     "openai/gpt-4o-mini",#15/60
@@ -620,6 +623,9 @@ def serve_react_app(path):
 
 
 import socket
+
+# Initialize translation API routes
+init_translation_api(app)
 
 def find_free_port(start_port=5000, max_tries=10):
     port = start_port

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translation Tool</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.8rem;
+        }
+        .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        .tool-container {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+            padding: 25px;
+        }
+        .tab-container {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            font-weight: bold;
+        }
+        .tab.active {
+            border-bottom: 3px solid #4a6fa5;
+            color: #4a6fa5;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .translation-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .text-area-container {
+            position: relative;
+        }
+        .text-area-container textarea {
+            width: 100%;
+            height: 200px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            resize: none;
+            box-sizing: border-box;
+        }
+        .text-area-container .lang-selector {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 5px;
+            z-index: 2;
+        }
+        .control-panel {
+            display: flex;
+            justify-content: space-between;
+            margin: 15px 0;
+        }
+        .button {
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        .button:hover {
+            background-color: #3a5985;
+        }
+        .button.secondary {
+            background-color: #f0f0f0;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+        .button.secondary:hover {
+            background-color: #e0e0e0;
+        }
+        .model-info {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+        }
+        #englishModelOutput {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border-left: 3px solid #4a6fa5;
+            white-space: pre-wrap;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(74, 111, 165, 0.3);
+            border-radius: 50%;
+            border-top-color: #4a6fa5;
+            animation: spin 1s ease-in-out infinite;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Translation Tool</h1>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="/translation/">Translation</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="tool-container">
+            <div class="tab-container">
+                <div class="tab active" data-tab="direct-translation">Direct Translation</div>
+                <div class="tab" data-tab="english-model">English Model with Translation Wrapper</div>
+            </div>
+
+            <div id="direct-translation" class="tab-content active">
+                <div class="translation-panel">
+                    <div class="text-area-container">
+                        <select class="lang-selector" id="sourceLang">
+                            <option value="auto">Auto Detect</option>
+                            <option value="zh">Chinese</option>
+                            <option value="en">English</option>
+                        </select>
+                        <textarea id="sourceText" placeholder="Enter text to translate..."></textarea>
+                    </div>
+
+                    <div class="text-area-container">
+                        <select class="lang-selector" id="targetLang">
+                            <option value="en">English</option>
+                            <option value="zh">Chinese</option>
+                        </select>
+                        <textarea id="translatedText" placeholder="Translation will appear here..." readonly></textarea>
+                    </div>
+                </div>
+
+                <div class="control-panel">
+                    <div class="model-info">
+                        Using model: <strong>Model A (Gemini Flash 1.5)</strong> for direct translation
+                    </div>
+                    <button id="translateBtn" class="button">Translate</button>
+                </div>
+            </div>
+
+            <div id="english-model" class="tab-content">
+                <div class="text-area-container">
+                    <textarea id="userInput" placeholder="Enter your prompt in English or Chinese..."></textarea>
+                </div>
+
+                <div class="control-panel">
+                    <div class="model-info">
+                        Using <strong>Model B (English-only)</strong> with automatic translation wrapper
+                    </div>
+                    <div>
+                        <button id="processBtn" class="button">Process</button>
+                        <button id="streamBtn" class="button secondary">Stream Response</button>
+                    </div>
+                </div>
+
+                <div id="englishModelOutput">Result will appear here...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching logic
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Remove active class from all tabs and contents
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                // Add active class to clicked tab and corresponding content
+                tab.classList.add('active');
+                const tabId = tab.getAttribute('data-tab');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+
+        // Direct translation functionality
+        document.getElementById('translateBtn').addEventListener('click', async () => {
+            const sourceText = document.getElementById('sourceText').value;
+            const sourceLang = document.getElementById('sourceLang').value;
+            const targetLang = document.getElementById('targetLang').value;
+            
+            if (!sourceText.trim()) {
+                alert('Please enter some text to translate');
+                return;
+            }
+            
+            // Show loading indicator
+            const translateBtn = document.getElementById('translateBtn');
+            const originalText = translateBtn.textContent;
+            translateBtn.innerHTML = 'Translating... <span class="loading"></span>';
+            translateBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/translation/api/translate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: sourceText,
+                        source_lang: sourceLang,
+                        target_lang: targetLang
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                document.getElementById('translatedText').value = data.translated_text;
+            } catch (error) {
+                alert('Translation failed: ' + error.message);
+                console.error('Translation error:', error);
+            } finally {
+                // Remove loading indicator
+                translateBtn.textContent = originalText;
+                translateBtn.disabled = false;
+            }
+        });
+        
+        // English model processing functionality
+        document.getElementById('processBtn').addEventListener('click', async () => {
+            await processWithEnglishModel(false);
+        });
+        
+        document.getElementById('streamBtn').addEventListener('click', async () => {
+            await processWithEnglishModel(true);
+        });
+        
+        async function processWithEnglishModel(stream) {
+            const userInput = document.getElementById('userInput').value;
+            
+            if (!userInput.trim()) {
+                alert('Please enter some text');
+                return;
+            }
+            
+            const outputDiv = document.getElementById('englishModelOutput');
+            const btnToDisable = stream ? document.getElementById('streamBtn') : document.getElementById('processBtn');
+            const originalText = btnToDisable.textContent;
+            btnToDisable.innerHTML = (stream ? 'Streaming...' : 'Processing...') + ' <span class="loading"></span>';
+            btnToDisable.disabled = true;
+            document.getElementById('processBtn').disabled = true;
+            document.getElementById('streamBtn').disabled = true;
+            
+            outputDiv.textContent = 'Processing...';
+            
+            if (stream) {
+                try {
+                    const response = await fetch('/translation/api/process-with-english-model', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: userInput,
+                            stream: true
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`Server responded with status: ${response.status}`);
+                    }
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    outputDiv.textContent = '';
+                    
+                    let buffer = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        outputDiv.textContent = buffer;
+                        // Auto scroll to bottom
+                        outputDiv.scrollTop = outputDiv.scrollHeight;
+                    }
+                    // Final decode to flush any remaining content
+                    buffer += decoder.decode();
+                    outputDiv.textContent = buffer;
+                } catch (error) {
+                    outputDiv.textContent = 'Error: ' + error.message;
+                    console.error('Streaming error:', error);
+                }
+            } else {
+                try {
+                    const response = await fetch('/translation/api/process-with-english-model', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: userInput,
+                            stream: false
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    outputDiv.textContent = data.response;
+                } catch (error) {
+                    outputDiv.textContent = 'Error: ' + error.message;
+                    console.error('Processing error:', error);
+                }
+            }
+            
+            // Re-enable buttons
+            document.getElementById('processBtn').disabled = false;
+            document.getElementById('streamBtn').disabled = false;
+            btnToDisable.textContent = originalText;
+        }
+    </script>
+</body>
+</html>

@@ -247,6 +247,7 @@
 <body :style="`font-size: ${fontSize}px`">
   <div class="sidebar">
     <button @click="addConversation()">＋ 新会话</button>
+    <a href="/translation/" style="display: block; text-align: center; margin-bottom: 8px; padding: 8px; background: #4a6fa5; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">翻译工具</a>
     <div class="list">
       <template x-for="conv in conversations" :key="conv.id">
         <button
