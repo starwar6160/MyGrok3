@@ -5,8 +5,9 @@ import json
 import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
-from translation_api import init_translation_api
-from response_utils import CostTracker, get_token_count, with_diagnostics
+from MyGrok3.translation_api import init_translation_api
+from MyGrok3.cost_calculator import CostTracker, estimate_cost
+from MyGrok3.response_utils import get_token_count, with_diagnostics
 import uuid
 
 # === React 静态页面托管 ===
@@ -194,8 +195,8 @@ def ensure_openrouter_models():
         start_openrouter_model_refresh()
         ensure_openrouter_models._started = True
 
-# 计算请求成本
-def estimate_cost(model_name, input_tokens, output_tokens):
+
+
     """
     Estimate the cost of a request in dollars.
     
@@ -207,14 +208,7 @@ def estimate_cost(model_name, input_tokens, output_tokens):
     Returns:
         float: Estimated cost in dollars
     """
-    ensure_openrouter_models()
-    price_dict = openrouter_models_cache.get('price_dict', {})
-    price = price_dict.get(model_name)
-    if price:
-        input_cost = (input_tokens / 1_000_000) * price.get('input', 0)
-        output_cost = (output_tokens / 1_000_000) * price.get('output', 0)
-        return input_cost + output_cost
-    return 0.0
+
 
 # 获取1M输出token的价格
 def get_1m_output_cost(model_name):

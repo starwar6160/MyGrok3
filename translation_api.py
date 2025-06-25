@@ -1,10 +1,19 @@
+"""
+Translation API implementation.
+"""
+import logging
+from typing import Dict, Any
 import os
 import json
 import tiktoken
 from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context, g
 import openai
 from datetime import datetime, timedelta
-from response_utils import CostTracker, get_token_count, estimate_cost
+from MyGrok3.cost_calculator import CostTracker
+from MyGrok3.response_utils import get_token_count
+from MyGrok3.cost_calculator import estimate_cost
+
+logger = logging.getLogger(__name__)
 
 # Initialize cost tracker for translation API
 translation_cost_tracker = CostTracker()
