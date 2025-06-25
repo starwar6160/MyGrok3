@@ -137,6 +137,6 @@ def estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> flo
 
 def initialize_prices():
     """Initialize price data from external source."""
-    from grok3 import get_1m_output_cost, ensure_openrouter_models, openrouter_models_cache
+    from MyGrok3.openrouter_manager import get_1m_output_cost, ensure_openrouter_models, openrouter_models_cache
     ensure_openrouter_models()
     price_manager.update_prices(openrouter_models_cache.get('price_dict', {}))
