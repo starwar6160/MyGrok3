@@ -6,16 +6,26 @@ non-streaming responses from LLM models.
 """
 import openai
 import os
-from typing import Dict, List, Any, Generator, Optional
+from typing import Dict, List, Any, Generator, Optional, Union
 import time
+from dataclasses import dataclass
 
 from MyGrok3.cache_manager import get_from_cache, add_to_cache
 from MyGrok3.conversation_utils import validate_messages
 from MyGrok3.cost_calculator import CostTracker, estimate_cost
-from MyGrok3.response_utils import get_token_count, with_diagnostics
+from MyGrok3.response_utils import get_token_count
 from MyGrok3 import logging_config
 
 logger = logging_config.configure_logger(__name__)
+
+@dataclass
+class FinalStats:
+    """Data class to hold final token and cost statistics."""
+    model_name: str
+    input_tokens: int
+    output_tokens: int
+    estimated_cost: float
+    full_answer: str
 
 # Configure the OpenRouter API client
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -34,16 +44,17 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 def ask_llm_stream(
     model: str, 
     messages: List[Dict[str, str]]
-) -> Generator[str, None, None]:
+) -> Generator[Union[str, FinalStats], None, None]:
     """
-    Send messages to LLM with streaming response.
-    
+    Send messages to LLM with streaming response and return final usage data.
+
     Args:
         model: The model identifier to use
         messages: List of message dictionaries
-        
+
     Yields:
-        Content chunks from the streaming response
+        - Content chunks from the streaming response (str)
+        - The final CompletionUsage object with token counts
     """
     validated_messages = validate_messages(messages)
     
@@ -58,10 +69,19 @@ def ask_llm_stream(
             stream=True
         )
         
+        completion_usage = None
         for chunk in response:
             if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
                 yield content
+            # The 'usage' field is only present in the final chunk
+            if chunk.usage:
+                completion_usage = chunk.usage
+
+        # After the loop, yield the final usage object
+        if completion_usage:
+            logger.info(f"[ask_grok] token usage: {completion_usage}")
+            yield completion_usage
                 
     except Exception as e:
         error_msg = f"Error in streaming response: {str(e)}"
@@ -114,63 +134,58 @@ def ask_llm(
 def generate_chat_response(
     model: str, 
     messages: List[Dict[str, str]]
-) -> Generator[str, None, None]:
+) -> Generator[Union[str, FinalStats], None, None]:
     """
-    Generate a complete chat response with diagnostic information.
-    
+    Generate a chat response, yielding content chunks and final stats.
+
     Args:
-        model: The model identifier to use
-        messages: List of message dictionaries
-        
+        model: The model identifier to use.
+        messages: List of message dictionaries.
+
     Yields:
-        Content chunks with final diagnostic information
+        - Content chunks (str).
+        - A single FinalStats object at the end of the stream.
     """
     full_answer = ''
-    input_tokens = 0
-    output_tokens = 0
     cost_tracker = CostTracker()
-    
-    # Calculate input tokens
+    usage_data = None
+
     try:
-        input_tokens = sum(
-            get_token_count(msg.get('content', '')) 
-            for msg in messages if isinstance(msg, dict)
-        )
-        
-        last_content = None
-        
-        # Process streaming response
+        # Process streaming response and get usage data
         for chunk in ask_llm_stream(model, messages):
-            full_answer += chunk
-            if last_content is not None:
-                yield last_content
-            last_content = chunk
-        
-        # Yield the last content chunk
-        if last_content is not None:
-            yield last_content
-        
-        # Calculate tokens and costs
-        output_tokens = get_token_count(full_answer)
-        estimated_cost = estimate_cost(model, input_tokens, output_tokens)
-        
-        # Update cost tracker
-        cost_tracker.update(input_tokens, output_tokens, estimated_cost)
-        
-        # Generate diagnostic info
-        diagnostics = cost_tracker.get_diagnostic_info(
+            if isinstance(chunk, str):
+                full_answer += chunk
+                yield chunk
+            else: # It's the final usage object
+                usage_data = chunk
+
+        if usage_data:
+            logger.debug(f"[CHAT_HANDLER] Received usage data: {usage_data}")
+            input_tokens = usage_data.prompt_tokens
+            output_tokens = usage_data.completion_tokens
+            logger.debug(f"[CHAT_HANDLER] Updating cost_tracker with: input={input_tokens}, output={output_tokens}")
+            estimated_cost = estimate_cost(model, input_tokens, output_tokens)
+            cost_tracker.update(input_tokens, output_tokens, estimated_cost)
+
+
+
+        else:
+            # Fallback for safety, though it shouldn't be reached
+            logger.warning("[CHAT_HANDLER] No usage data received. Falling back to manual count.")
+            input_tokens = get_token_count(" ".join(m['content'] for m in messages if m.get('content')))
+            output_tokens = get_token_count(full_answer)
+            logger.debug(f"[CHAT_HANDLER] Fallback cost_tracker update: input={input_tokens}, output={output_tokens}")
+            estimated_cost = estimate_cost(model, input_tokens, output_tokens)
+            cost_tracker.update(input_tokens, output_tokens, estimated_cost)
+
+        # Yield the final statistics object instead of the footer
+        yield FinalStats(
             model_name=model,
-            input_text='',  # Don't include full text
-            output_text=full_answer,
-            is_debug=True
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost=estimated_cost,
+            full_answer=full_answer
         )
-        
-        if diagnostics:
-            # Add separator and diagnostics
-            yield f"\n\n---\n{diagnostics}"
-            
-            if DEBUG_MESSAGES:
-                logger.debug(f"[DIAGNOSTICS] {diagnostics}")
     
     except Exception as e:
         error_msg = f"Error in generate_chat_response: {str(e)}"

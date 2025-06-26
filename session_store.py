@@ -114,38 +114,30 @@ class SessionStore:
     def update_stats(
         self, 
         session_id: str, 
-        model: str,
-        tokens_in: int = 0,
-        tokens_out: int = 0,
-        cost: float = 0.0
+        token_delta: int = 0,
+        cost_delta: float = 0.0
     ) -> None:
         """
         Update token and cost statistics for a session.
-        
+
         Args:
-            session_id: Unique identifier for the session
-            model: Model ID used for the request
-            tokens_in: Number of input tokens used
-            tokens_out: Number of output tokens used
-            cost: Cost of the request in USD
+            session_id: Unique identifier for the session.
+            token_delta: The number of tokens to add to the session's total.
+            cost_delta: The cost to add to the session's total.
         """
         with self._lock:
-            # Update session stats
             session = self.get_session(session_id)
-            session["token_count"] = session.get("token_count", 0) + tokens_in + tokens_out
-            session["total_cost"] = session.get("total_cost", 0.0) + cost
-            session["requests_count"] = session.get("requests_count", 0) + 1
             
-            # Update model usage for this session
-            models_used = session.get("models_used", {})
-            models_used[model] = models_used.get(model, 0) + 1
-            session["models_used"] = models_used
+            # Update session stats
+            session["token_count"] = session.get("token_count", 0) + token_delta
+            session["total_cost"] = session.get("total_cost", 0.0) + cost_delta
+            session["requests_count"] += 1
+            session["last_active"] = datetime.now().isoformat()
             
             # Update global stats
-            self._global_stats["total_tokens"] += tokens_in + tokens_out
-            self._global_stats["total_cost"] += cost
+            self._global_stats["total_tokens"] += token_delta
+            self._global_stats["total_cost"] += cost_delta
             self._global_stats["requests_count"] += 1
-            self._global_stats["models_usage"][model] += 1
             self._global_stats["last_updated"] = datetime.now().isoformat()
     
     def get_global_stats(self) -> Dict[str, Any]:

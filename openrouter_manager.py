@@ -127,8 +127,13 @@ def _fetch_openrouter_models() -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def ensure_openrouter_models() -> None:
+def ensure_openrouter_models(force_refresh: bool = False) -> None:
     """Ensure the cache is populated and fresh (≈24 h freshness)."""
+    if force_refresh:
+        logger.info("Forcing refresh of OpenRouter model prices.")
+        _fetch_openrouter_models()
+        return
+
     now = datetime.now()
     last: Optional[datetime] = openrouter_models_cache.get("last_fetch")  # type: ignore[arg-type]
 

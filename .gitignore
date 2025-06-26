@@ -5,3 +5,5 @@ data/*
 openrouter_model_prices.json
 static/*
 venv/*
+logs/*
+

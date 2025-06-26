@@ -6,8 +6,9 @@ import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
 from MyGrok3.translation_api import init_translation_api
-from MyGrok3.cost_calculator import CostTracker, estimate_cost
-from MyGrok3.response_utils import get_token_count, with_diagnostics
+from MyGrok3.cost_calculator import CostTracker
+from MyGrok3.chat_handler import generate_chat_response, FinalStats
+from MyGrok3.session_store import get_session_store
 from MyGrok3.openrouter_manager import (
     ensure_openrouter_models,
     get_1m_output_cost,
@@ -15,6 +16,9 @@ from MyGrok3.openrouter_manager import (
     openrouter_models_cache,
 )
 import uuid
+
+from MyGrok3 import logging_config
+logger = logging_config.configure_logger(__name__)
 
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="templates")
@@ -344,8 +348,7 @@ def api_title_summary():
         print('[FLASK] /api/title_summary response:', title)
     return jsonify({"title": title or "新会话"})
 
-@app.route("/api/chat", methods=["POST"])
-@with_diagnostics(model_name_key='model', is_debug=True)  # Enable debug mode to always show diagnostics
+@app.route('/api/chat', methods=['POST'])
 def api_chat():
     # Initialize cost tracker for this request
     if 'cost_tracker' not in g:
@@ -404,80 +407,63 @@ def api_chat():
     import time
     
     if DEBUG_MESSAGES:
-        print(f"[api_chat] question_length={len(question)}")
-        print(f"[api_chat] model={selected_model!r}")
-        print(f"[api_chat] history_count={len(history)}")
-    def generate():
-        full_answer = ''
-        model_name = selected_model  # Capture the model name
-        total_tokens = 0
-        input_tokens = 0
-        output_tokens = 0
-        cost_tracker = CostTracker()  # Create a new cost tracker for this response
-        
-        # Calculate input tokens from messages
-        try:
-            input_tokens = sum(
-                get_token_count(msg.get('content', '')) 
-                for msg in messages if isinstance(msg, dict)
-            )
-            
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                stream=True
-            )
-            last_content = None
-            
-            # Process streaming response
-            for chunk in response:
-                if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_answer += content
-                    if last_content is not None:
-                        yield last_content
-                    last_content = content
-            
-            # Yield the last content chunk if it exists
-            if last_content is not None:
-                yield last_content
-            
-            # Calculate tokens and costs after streaming completes
-            output_tokens = get_token_count(full_answer)
-            total_tokens = input_tokens + output_tokens
-            estimated_cost = estimate_cost(model_name, input_tokens, output_tokens)
-            
-            # Update cost tracker
-            cost_tracker.update(input_tokens, output_tokens, estimated_cost)
-            
-            # Always generate diagnostic info for the response
-            diagnostics = cost_tracker.get_diagnostic_info(
-                model_name=model_name,
-                input_text='',  # Don't include full text in streaming
-                output_text=full_answer,
-                is_debug=True  # Always include full diagnostics
-            )
-            if diagnostics:
-                # Add a clear separator and the diagnostics
-                yield f"\n\n---\n{diagnostics}"
-                
-                # Also log the diagnostics for debugging
-                if DEBUG_MESSAGES:
-                    print(f"[DIAGNOSTICS] {diagnostics}")
-        
-        except Exception as e:
-            error_msg = f"Error in generate(): {str(e)}"
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
-            yield error_msg
+        logger.debug(f"[api_chat] question_length={len(question)}")
+        logger.debug(f"[api_chat] model={selected_model!r}")
+        logger.debug(f"[api_chat] history_count={len(history)}")
 
-        except openai.NotFoundError as e:
-            yield f"API Error: {e}"
+    @stream_with_context
+    def response_generator():
+        final_stats = None
+        try:
+            # Yield content chunks from the main chat handler
+            for chunk in generate_chat_response(selected_model, messages):
+                if isinstance(chunk, str):
+                    yield chunk
+                elif isinstance(chunk, FinalStats):
+                    final_stats = chunk
+                    break  # Final stats received, exit loop to process them
+
+            if final_stats:
+                # With the request context still alive, update the session
+                store = get_session_store()
+                if hasattr(g, 'session_id') and g.session_id:
+                    session_id = g.session_id
+                    logger.warning(f"[API_CHAT] Session ID {session_id}: Updating and finalizing stats.")
+                    
+                    # Update session store with the stats of THIS request
+                    store.update_stats(
+                        session_id,
+                        token_delta=final_stats.input_tokens + final_stats.output_tokens, 
+                        cost_delta=final_stats.estimated_cost
+                    )
+                    session_data = store.get_session(session_id)
+                    logger.warning(f"[API_CHAT] Fetched session data: {session_data}")
+
+                    # Create a cost_tracker to generate the final footer
+                    cost_tracker = CostTracker()
+                    # This tracker holds the cost/tokens for the CURRENT response
+                    cost_tracker.update(final_stats.input_tokens, final_stats.output_tokens, final_stats.estimated_cost)
+                    # These attributes hold the CUMULATIVE data for the whole session
+                    cost_tracker.session_cumulative_token = session_data.get('token_count', 0)
+                    cost_tracker.session_cumulative_cost = session_data.get('total_cost', 0.0)
+
+                    diagnostics = cost_tracker.get_diagnostic_info(
+                        model_name=final_stats.model_name,
+                        output_text=final_stats.full_answer,
+                        is_debug=True
+                    )
+                    if diagnostics:
+                        yield f"\n\n---\n{diagnostics}"
+                else:
+                    logger.error("[API_CHAT] No session_id found in g. Could not persist stats.")
+            else:
+                logger.error("[API_CHAT] FinalStats object not received from generator.")
+
         except Exception as e:
-            yield f"Unexpected Error: {e}"
-        
-    return Response(generate(), mimetype='text/plain')
+            logger.error(f"Error in response_generator: {e}", exc_info=True)
+            yield f"\n\nError: {e}"
+
+    return Response(response_generator(), mimetype='text/plain')
 
 @app.route('/<path:path>')
 def serve_react_app(path):

@@ -13,11 +13,20 @@ from flask_cors import CORS
 from MyGrok3 import logging_config
 from MyGrok3.chat_api import register_blueprint as register_chat_api
 from MyGrok3.frontend import register_blueprint as register_frontend
-from MyGrok3.translation_api import init_translation_api
+from MyGrok3.translation_api import register_blueprint as register_translation_api
+from MyGrok3.utils.price_utils import price_api
 from MyGrok3.session_store import get_session_store
+from MyGrok3.cost_calculator import initialize_prices
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)
+
+# 初始化价格表，防止footer金额为0
+try:
+    initialize_prices()
+    logger.info("[APP INIT] Model price table initialized.")
+except Exception as e:
+    logger.error(f"[APP INIT] Failed to initialize model price table: {e}")
 
 def create_app():
     """
@@ -58,7 +67,8 @@ def create_app():
     # Register all blueprints
     register_chat_api(app)
     register_frontend(app)
-    init_translation_api(app)
+    register_translation_api(app)
+    app.register_blueprint(price_api)
     
     logger.info("All blueprints registered")
     
