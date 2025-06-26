@@ -1,0 +1,86 @@
+.translation-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.chat-window {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.message {
+  display: flex;
+  max-width: 80%;
+  padding: 10px 15px;
+  border-radius: 18px;
+  line-height: 1.4;
+}
+
+.message.user {
+  align-self: flex-end;
+  background-color: #007bff;
+  color: white;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background-color: #f1f1f1;
+  color: #333;
+}
+
+.message-content.chinese {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #ddd;
+}
+
+.input-area {
+  display: flex;
+  padding: 10px;
+  border-top: 1px solid #ddd;
+}
+
+.input-area textarea {
+  flex-grow: 1;
+  border-radius: 18px;
+  padding: 10px 15px;
+  border: 1px solid #ddd;
+  resize: none;
+  font-size: 16px;
+  margin-right: 10px;
+  max-height: 100px;
+}
+
+.input-area button {
+  border: none;
+  background-color: #007bff;
+  color: white;
+  border-radius: 18px;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.input-area button:disabled {
+  background-color: #a0c8f0;
+}
+
+@media (max-width: 600px) {
+  .translation-container {
+    padding: 0;
+  }
+  .chat-window {
+    padding: 10px;
+  }
+  .message {
+    max-width: 90%;
+  }
+}

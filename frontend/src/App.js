@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
+import { Routes, Route } from 'react-router-dom';
 import Sidebar from "./components/Sidebar";
 import ChatWindow from "./components/ChatWindow";
 import InputBar from "./components/InputBar";
 import ConfirmDialog from "./components/ConfirmDialog";
+import Translation from './components/Translation';
 import "./index.css";
 
 const defaultModels = [
@@ -336,36 +338,40 @@ export default function App() {
   };
 
   return (
-    <div className="app-root">
-      <Sidebar
-        conversations={conversations}
-        currentId={currentId}
-        setCurrentId={setCurrentId}
-        addConversation={addConversation}
-      />
-      <div className="main">
-        {/* 删除按钮置顶，仅在有会话时显示 */}
-        <div style={{display:'flex',justifyContent:'flex-end',alignItems:'center',padding:'8px 0'}}>
-          {conversations.length > 0 && (
-            <button onClick={() => setShowDelete(true)} style={{background:'#f8f8fa',border:'1px solid #eee',borderRadius:8,padding:'6px 18px',fontSize:'1em',color:'#d9534f',marginRight:12}}>删除会话</button>
-          )}
-        </div>
-        <ChatWindow messages={currentConv ? currentConv.messages : []} />
-        <InputBar
-          onSend={sendMessage}
-          onCopy={copyConversation}
-          selectedModel={selectedModel}
-          onModelChange={updateSelectedModel}
-          onRetry={showRetry ? handleRetry : undefined}
-          models={models}
-        />
-      </div>
-      {showDelete && (
-        <ConfirmDialog
-          onConfirm={deleteConversation}
-          onCancel={() => setShowDelete(false)}
-        />
-      )}
-    </div>
+      <Routes>
+        <Route path="/" element={(
+          <div className="app-root">
+            <Sidebar
+              conversations={conversations}
+              currentId={currentId}
+              setCurrentId={setCurrentId}
+              addConversation={addConversation}
+            />
+            <div className="main">
+              <div style={{display:'flex',justifyContent:'flex-end',alignItems:'center',padding:'8px 0'}}>
+                {conversations.length > 0 && (
+                  <button onClick={() => setShowDelete(true)} style={{background:'#f8f8fa',border:'1px solid #eee',borderRadius:8,padding:'6px 18px',fontSize:'1em',color:'#d9534f',marginRight:12}}>删除会话</button>
+                )}
+              </div>
+              <ChatWindow messages={currentConv ? currentConv.messages : []} />
+              <InputBar
+                onSend={sendMessage}
+                onCopy={copyConversation}
+                selectedModel={selectedModel}
+                onModelChange={updateSelectedModel}
+                onRetry={showRetry ? handleRetry : undefined}
+                models={models}
+              />
+            </div>
+            {showDelete && (
+              <ConfirmDialog
+                onConfirm={deleteConversation}
+                onCancel={() => setShowDelete(false)}
+              />
+            )}
+          </div>
+        )} />
+        <Route path="/translation" element={<Translation />} />
+      </Routes>
   );
 }

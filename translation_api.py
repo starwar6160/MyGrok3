@@ -6,7 +6,7 @@ from typing import Dict, Any
 import os
 import json
 import tiktoken
-from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context, g
+from flask import Blueprint, request, jsonify, Response, stream_with_context, g
 import openai
 from datetime import datetime, timedelta
 from MyGrok3.cost_calculator import CostTracker
@@ -38,11 +38,6 @@ TRANSLATION_MODEL = "google/gemini-flash-1.5-8b"  # More literal, instruction-fo
 #ENGLISH_MODEL = "thedrummer/unslopnemo-12b"  # Handles English content only
 ENGLISH_MODEL = "google/gemini-2.5-flash-lite-preview-06-17"  # Handles English content only
 
-
-# Route to serve the translation page
-@translation_bp.route('/')
-def translation_page():
-    return render_template('translation.html')
 
 # API endpoint for direct translation between Chinese and English
 @translation_bp.route('/api/translate', methods=['POST'])
