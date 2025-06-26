@@ -37,9 +37,7 @@
 }
 
 .message-content.chinese {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #ddd;
+    margin-top: 5px;
 }
 
 .input-area {
@@ -71,6 +69,28 @@
 
 .input-area button:disabled {
   background-color: #a0c8f0;
+}
+
+.action-buttons {
+  display: flex;
+  justify-content: center;
+  padding: 10px;
+  gap: 10px;
+  border-top: 1px solid #ddd;
+}
+
+.action-buttons button {
+  border: none;
+  background-color: #6c757d;
+  color: white;
+  border-radius: 18px;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.action-buttons button:disabled {
+  background-color: #a0a0a0;
 }
 
 @media (max-width: 600px) {
