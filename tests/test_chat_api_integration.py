@@ -8,9 +8,9 @@ import unittest
 import json
 from unittest.mock import patch
 
-from MyGrok3.app import create_app
-from MyGrok3.session_store import get_session_store
-from MyGrok3.chat_handler import FinalStats
+from app import create_app
+from session_store import get_session_store
+from chat_handler import FinalStats
 
 class ChatApiIntegrationTest(unittest.TestCase):
     """Integration tests for chat API endpoints."""

@@ -3,7 +3,7 @@ Tests for cost calculation functionality.
 """
 import unittest
 from unittest.mock import patch, MagicMock
-from MyGrok3.cost_calculator import PriceManager, estimate_cost, initialize_prices
+from cost_calculator import PriceManager, estimate_cost, initialize_prices
 
 class TestPriceManager(unittest.TestCase):
     def setUp(self):

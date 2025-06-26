@@ -7,7 +7,7 @@ and other common operations on messages.
 from typing import List, Dict, Any, Optional
 import tiktoken
 
-from MyGrok3 import logging_config
+import logging_config
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)

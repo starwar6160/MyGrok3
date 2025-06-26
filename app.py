@@ -10,13 +10,13 @@ import uuid
 from flask import Flask, g, session
 from flask_cors import CORS
 
-from MyGrok3 import logging_config
-from MyGrok3.chat_api import register_blueprint as register_chat_api
-from MyGrok3.frontend import register_blueprint as register_frontend
-from MyGrok3.translation_api import init_translation_api as register_translation_api
-from MyGrok3.utils.price_utils import price_api
-from MyGrok3.session_store import get_session_store
-from MyGrok3.cost_calculator import initialize_prices
+import logging_config
+from chat_api import register_blueprint as register_chat_api
+from frontend import register_blueprint as register_frontend
+from translation_api import init_translation_api as register_translation_api
+from utils.price_utils import price_api
+from session_store import get_session_store
+from cost_calculator import initialize_prices
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)

@@ -2,7 +2,7 @@
 Tests for token counting functionality.
 """
 import unittest
-from MyGrok3.token_counter import TokenCounter
+from token_counter import TokenCounter
 
 class TestTokenCounter(unittest.TestCase):
     def test_count_tokens(self):

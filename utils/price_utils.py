@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
-from MyGrok3.cost_calculator import initialize_prices
-from MyGrok3 import logging_config
+from cost_calculator import initialize_prices
+import logging_config
 
 logger = logging_config.configure_logger(__name__)
 

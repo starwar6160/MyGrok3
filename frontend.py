@@ -6,12 +6,12 @@ This module handles serving static files and frontend routes.
 from pathlib import Path
 from flask import Blueprint, send_from_directory, render_template
 
-from MyGrok3.openrouter_manager import (
+from openrouter_manager import (
     ensure_openrouter_models, 
     get_1m_output_cost,
     openrouter_models_cache
 )
-from MyGrok3 import logging_config
+import logging_config
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)

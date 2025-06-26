@@ -5,7 +5,7 @@ import unittest
 import json
 from unittest.mock import MagicMock, patch
 from flask import Flask
-from MyGrok3.diagnostics import ResponseFormatter, track_metrics
+from diagnostics import ResponseFormatter, track_metrics
 
 class TestResponseFormatter(unittest.TestCase):
     def test_add_diagnostics(self):

@@ -5,12 +5,16 @@ import json
 import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
-from MyGrok3.translation_api import init_translation_api
-from MyGrok3.chat_api import register_blueprint as register_chat_blueprint
-from MyGrok3.cost_calculator import CostTracker, initialize_prices
-from MyGrok3.chat_handler import generate_chat_response, FinalStats
-from MyGrok3.session_store import get_session_store
-from MyGrok3.openrouter_manager import (
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from translation_api import init_translation_api
+from chat_api import register_blueprint as register_chat_blueprint
+from cost_calculator import CostTracker, initialize_prices
+from chat_handler import generate_chat_response, FinalStats
+from session_store import get_session_store
+from openrouter_manager import (
     ensure_openrouter_models,
     get_1m_output_cost,
     suggest_cheaper_models,
@@ -18,7 +22,7 @@ from MyGrok3.openrouter_manager import (
 )
 import uuid
 
-from MyGrok3 import logging_config
+import logging_config
 logger = logging_config.configure_logger(__name__)
 
 # === React 静态页面托管 ===

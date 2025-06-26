@@ -2,7 +2,7 @@
 Module for handling cost calculations and token tracking with improved structure.
 """
 from typing import Optional, Dict
-from MyGrok3 import logging_config
+import logging_config
 import logging
 import threading
 from functools import lru_cache
@@ -138,7 +138,7 @@ class PriceManager:
                 # Double-check after acquiring lock to prevent re-initialization
                 if not self._price_data:
                     logger.info("[PriceManager] Price data empty. Triggering lazy initialization.")
-                    from MyGrok3.cost_calculator import initialize_prices
+                    from cost_calculator import initialize_prices
                     initialize_prices()
         return self._price_data.get(model_name, {'input': 0, 'output': 0})
     
@@ -185,7 +185,7 @@ def initialize_prices(force_refresh: bool = False):
         force_refresh: If True, forces a fetch from the remote API,
                        bypassing any caches.
     """
-    from MyGrok3.openrouter_manager import ensure_openrouter_models, openrouter_models_cache, _load_price_cache
+    from openrouter_manager import ensure_openrouter_models, openrouter_models_cache, _load_price_cache
 
     try:
         # Step 1: Attempt to get prices (respecting cache unless forced)

@@ -6,12 +6,12 @@ This module implements chat-related API endpoints as a Flask Blueprint.
 from flask import Blueprint, request, Response, stream_with_context, jsonify, g
 from typing import Dict, List, Any, Generator
 
-from MyGrok3.session_store import get_session_store
-from MyGrok3.chat_handler import generate_chat_response, FinalStats
-from MyGrok3.conversation_utils import summarize_history
-from MyGrok3.cost_calculator import estimate_cost, CostTracker
-from MyGrok3.response_utils import get_token_count
-from MyGrok3 import logging_config
+from session_store import get_session_store
+from chat_handler import generate_chat_response, FinalStats
+from conversation_utils import summarize_history
+from cost_calculator import estimate_cost, CostTracker
+from response_utils import get_token_count
+import logging_config
 
 # Configure logger
 logger = logging_config.configure_logger(__name__)

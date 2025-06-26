@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 import threading
 
-from MyGrok3.session_store import SessionStore, get_session_store
+from session_store import SessionStore, get_session_store
 
 class TestSessionStore(unittest.TestCase):
     """Test cases for the SessionStore class."""

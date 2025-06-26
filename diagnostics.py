@@ -5,7 +5,7 @@ from flask import g
 from functools import wraps
 import json
 from typing import Callable, Any
-from MyGrok3.session_manager import session_manager
+from session_manager import session_manager
 import logging
 
 logger = logging.getLogger(__name__)

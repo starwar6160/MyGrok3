@@ -10,11 +10,11 @@ import logging
 from flask import g
 
 # Local application imports
-from MyGrok3.session_manager import session_manager
-from MyGrok3.cost_calculator import estimate_cost
-from MyGrok3.diagnostics import track_metrics, ResponseFormatter
-from MyGrok3.token_counter import TokenCounter
-from MyGrok3 import logging_config
+from session_manager import session_manager
+from cost_calculator import estimate_cost
+from diagnostics import track_metrics, ResponseFormatter
+from token_counter import TokenCounter
+import logging_config
 
 # Constants
 DEFAULT_MODEL = "gpt-3.5-turbo"

@@ -10,9 +10,9 @@ from pathlib import Path
 from flask import Blueprint, render_template, request, Response, stream_with_context
 from flask import g, session, send_from_directory, jsonify
 
-from MyGrok3.chat_handler import generate_chat_response
-from MyGrok3.conversation_utils import summarize_history
-from MyGrok3.openrouter_manager import (
+from chat_handler import generate_chat_response
+from conversation_utils import summarize_history
+from openrouter_manager import (
     ensure_openrouter_models, 
     get_1m_output_cost,
     suggest_cheaper_models,
@@ -214,5 +214,5 @@ def register_blueprints(app):
     app.register_blueprint(main_bp)
     
     # Import and register the translation blueprint
-    from MyGrok3.translation_api import init_translation_api
+    from translation_api import init_translation_api
     init_translation_api(app)
