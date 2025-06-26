@@ -26,30 +26,7 @@ chat_bp = Blueprint('chat', __name__)
 USE_STABLE_MODELS = False
 
 # Model configurations - moved here from grok3.py/routes.py
-MODELS_EXPERIMENTAL = [        
-    # Gemini models
-    "google/gemini-flash-1.5-8b",    #3.8/15            
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40   
-    "google/gemma-3-12b-it",    #5/10
-    "google/gemma-3-27b-it:free",    #10/19         
-    
-    # Other models
-    "qwen/qwen3-32b:free",    #10/30
-    "moonshotai/kimi-dev-72b:free",       
-    
-    # General economic models
-    "openai/gpt-4o-mini",  #15/60
-    "x-ai/grok-3-mini",  #30/50    
-    "deepseek/deepseek-r1-distill-llama-70b:free",   #10/40
-    "deepseek/deepseek-r1-0528:free",    #55/219    
-]
-
-MODELS_STABLE = [
-    "google/gemini-2.5-flash-lite-preview-06-17",  #10/40    
-    "x-ai/grok-3-mini",    
-    "openai/gpt-4o-mini",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
-]
+from models_config import MODELS_EXPERIMENTAL, MODELS_STABLE
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
 DEFAULT_MODEL = MODELS[0]

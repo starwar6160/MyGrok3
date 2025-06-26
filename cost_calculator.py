@@ -6,6 +6,8 @@ import logging_config
 import logging
 import threading
 from functools import lru_cache
+import json
+import models_config
 
 # Get configured logger
 logger = logging_config.configure_logger(__name__)
@@ -205,8 +207,8 @@ def initialize_prices(force_refresh: bool = False):
                 "google/gemini-flash-1.5-8b": {"input": 0.0004, "output": 0.0004},
                 "google/gemini-flash-1.5-8b:free": {"input": 0.0004, "output": 0.0004},
                 "google/gemini-flash-1.5-b:latest": {"input": 0.0004, "output": 0.0004},
-                "google/gemini-2.5-flash-lite-preview-06-17": {"input": 0.001, "output": 0.001},
-                "google/gemini-2.5-flash-lite-preview-06-17:free": {"input": 0.001, "output": 0.001},
+                models_config.GEMINI_2_5_FLASH_LITE: {"input": 0.001, "output": 0.001},
+                f"{models_config.GEMINI_2_5_FLASH_LITE}:free": {"input": 0.001, "output": 0.001},
             }
         else:
             logger.info("[PRICE INIT] Price dictionary loaded successfully.")

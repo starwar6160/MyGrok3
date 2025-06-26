@@ -68,30 +68,7 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 # Flag to switch between experimental and stable model lists
 USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
-MODELS_EXPERIMENTAL = [        
-    #gemini-flash-1.5-8b很便宜，飞快，数字比较错误但是能准确讲解日语语法
-    "google/gemini-flash-1.5-8b",    #3.8/15            
-    #能正确回答9.9和9.11哪一个大,正确讲解日语语法的模型：    
-    "google/gemini-2.5-flash-lite-preview-06-17",   #10/40   
-    "google/gemma-3-12b-it",    #5/10
-    "google/gemma-3-27b-it:free",    #10/19         
-    "qwen/qwen3-32b:free",    #10/30
-    "moonshotai/kimi-dev-72b:free",       
-    #一般经济型模型
-    "openai/gpt-4o-mini",#15/60
-    "x-ai/grok-3-mini",#30/50    
-    "deepseek/deepseek-r1-distill-llama-70b:free",   #10/40
-    "deepseek/deepseek-r1-0528:free",    #55/219    
-    #"thedrummer/unslopnemo-12b",#45/45    
-]
-
-
-MODELS_STABLE = [
-    "google/gemini-2.5-flash-lite-preview-06-17",#10/40    
-    "x-ai/grok-3-mini",    
-    "openai/gpt-4o-mini",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
-]
+from models_config import MODELS_EXPERIMENTAL, MODELS_STABLE
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
 DEFAULT_MODEL = MODELS[0]
