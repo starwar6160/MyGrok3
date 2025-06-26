@@ -34,12 +34,35 @@ function splitByPunctuation(text) {
 }
 
 export default function ReplyBox({ content }) {
-  const parts = splitContent(content);
+  let mainContent = content;
+  let diagnostics = null;
+
+  if (content && content.includes('\n\n---\n')) {
+    const contentParts = content.split('\n\n---\n');
+    mainContent = contentParts[0];
+    const diagnosticString = contentParts[1];
+
+    if (diagnosticString) {
+      const metrics = {};
+      diagnosticString.split('|').forEach(part => {
+          const [key, ...valueParts] = part.split(':');
+          const value = valueParts.join(':').trim();
+          if (key.trim() === 'Model') metrics.model = value;
+          if (key.trim() === 'CurrentTokens') metrics.tokens = value;
+          if (key.trim() === '累计费用') metrics.cost = value;
+      });
+      if (Object.keys(metrics).length > 0) {
+          diagnostics = metrics;
+      }
+    }
+  }
+
+  const parts = splitContent(mainContent);
 
   // 复制全部内容
   const handleCopy = () => {
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(content);
+      navigator.clipboard.writeText(content); // Copy original full content
     } else {
       const textarea = document.createElement("textarea");
       textarea.value = content;
@@ -87,25 +110,26 @@ export default function ReplyBox({ content }) {
           } else {
             // 正文分句渲染
             let text = part.text;
-            // 如果有多条累计成本，只保留最后一条
-            if (text.includes('本会话累计成本')) {
-              // 只保留最后一条累计成本提示
-              const lines = text.split(/\n+/);
-              let lastCostLine = '';
-              let otherLines = [];
-              for (let line of lines) {
-                if (line.includes('本会话累计成本')) {
-                  lastCostLine = line;
-                } else {
-                  otherLines.push(line);
-                }
-              }
-              text = [...otherLines.filter(l=>l.trim()), lastCostLine].filter(Boolean).join('\n');
-            }
             const sentences = splitByPunctuation(text);
             return sentences.map((sent, j) => sent.trim() ? <span key={i+"-"+j} style={{display:'block',whiteSpace:'pre-wrap',marginBottom:4}}>{sent}</span> : null);
           }
         })}
+        {diagnostics && (
+          <div className="diagnostics" style={{
+              borderTop: '1px solid #eee', 
+              marginTop: '10px', 
+              paddingTop: '5px', 
+              color: '#888', 
+              fontSize: '0.8em',
+              fontFamily: 'monospace'
+          }}>
+            <span>{`Model: ${diagnostics.model}`}</span>
+            <span style={{margin: '0 8px'}}>|</span>
+            <span>{`Tokens: ${diagnostics.tokens}`}</span>
+            <span style={{margin: '0 8px'}}>|</span>
+            <span>{`Cost: ${diagnostics.cost}`}</span>
+          </div>
+        )}
       </div>
       {/* box底部单独复制按钮 */}
       <div style={{width:'100%', display:'flex', justifyContent:'flex-end', position:'absolute', left:0, bottom:6, padding:'0 10px'}}>

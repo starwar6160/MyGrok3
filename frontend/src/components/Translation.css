@@ -70,6 +70,29 @@
     border-top: 1px solid #ddd;
 }
 
+.message-diagnostics {
+    margin-top: 10px;
+    font-size: 0.85em;
+    color: #666;
+    width: 100%;
+}
+
+.message-diagnostics hr {
+    border: 0;
+    height: 1px;
+    background-color: #ddd;
+    margin: 8px 0;
+}
+
+.message-diagnostics pre {
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: monospace;
+    background-color: #f8f9fa;
+    padding: 8px;
+    border-radius: 4px;
+}
+
 .input-area {
   display: flex;
   align-items: center;

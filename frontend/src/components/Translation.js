@@ -113,65 +113,74 @@ const Translation = () => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       
-      setMessages(prevMessages => [...prevMessages, { type: 'assistant', text: '', chinese: '' }]);
-      let partialChunk = '';
+      // Initialize empty assistant message
+      setMessages(prevMessages => [...prevMessages, { 
+        type: 'assistant', 
+        text: '', 
+        chinese: '',
+        diagnostics: '' // New field to store cost/token statistics
+      }]);
+      
+      let fullResponse = '';
 
+      // Process the plaintext streaming response
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        partialChunk += decoder.decode(value, { stream: true });
-        let boundary = partialChunk.indexOf('\n\n');
-
-        while(boundary !== -1) {
-            const chunk = partialChunk.substring(0, boundary);
-            partialChunk = partialChunk.substring(boundary + 2);
-
-            if (chunk.startsWith('data: ')) {
-                const jsonString = chunk.substring(6);
-                if (jsonString === '[DONE]') {
-                    break;
-                }
-                try {
-                    const data = JSON.parse(jsonString);
-                    if(data.content) {
-                        setMessages(prevMessages => {
-                            const lastMessageIndex = prevMessages.length - 1;
-                            const lastMessage = prevMessages[lastMessageIndex];
-                            
-                            const updatedLastMessage = { ...lastMessage };
-
-                            if (data.content.includes('[中文翻译]:')) {
-                                updatedLastMessage.chinese += data.content.split('[中文翻译]:')[1];
-                            } else if (data.content.includes('[English Model Response]:')) {
-                                // Ignore
-                            } else if (data.content.includes('[Translating response to Chinese...]')) {
-                                // Ignore
-                            } else {
-                                updatedLastMessage.text += data.content;
-                            }
-                            
-                            const newMessages = [...prevMessages];
-                            newMessages[lastMessageIndex] = updatedLastMessage;
-                            return newMessages;
-                        });
-                    }
-                } catch (e) {
-                    console.error('Error parsing JSON chunk:', e);
-                }
-            }
-            boundary = partialChunk.indexOf('\n\n');
-        }
+        // Decode the chunk and add it to the full response
+        const chunk = decoder.decode(value, { stream: true });
+        fullResponse += chunk;
+        
+        // Check if the response contains diagnostics (after '---')
+        const parts = fullResponse.split('\n\n---\n');
+        const mainContent = parts[0];
+        const diagnostics = parts.length > 1 ? parts[1] : '';
+        
+        // Update the message with the current content
+        setMessages(prevMessages => {
+          const lastMessageIndex = prevMessages.length - 1;
+          if (lastMessageIndex < 0) return prevMessages;
+          
+          const lastMessage = prevMessages[lastMessageIndex];
+          if (lastMessage.type !== 'assistant') return prevMessages;
+          
+          // Create updated message with current content
+          const updatedLastMessage = { 
+            ...lastMessage,
+            text: mainContent,
+            diagnostics: diagnostics
+          };
+          
+          const newMessages = [...prevMessages];
+          newMessages[lastMessageIndex] = updatedLastMessage;
+          return newMessages;
+        });
       }
+      
+      console.log('Translation streaming completed successfully');
+      
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error during translation:', error);
       setMessages(prevMessages => {
-          const lastMessage = prevMessages[prevMessages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant' && lastMessage.text === '' && lastMessage.chinese === '') {
-              const updatedMessages = [...prevMessages.slice(0, -1), { type: 'assistant', text: 'An error occurred. Please try again.', chinese: '' }];
-              return updatedMessages;
-          }
-          return [...prevMessages, { type: 'assistant', text: 'An error occurred. Please try again.', chinese: '' }];
+        const lastMessage = prevMessages[prevMessages.length - 1];
+        if (lastMessage && lastMessage.type === 'assistant' && lastMessage.text === '') {
+          // Replace the empty assistant message with an error
+          const updatedMessages = [...prevMessages.slice(0, -1), { 
+            type: 'assistant', 
+            text: 'An error occurred during translation. Please try again.', 
+            chinese: '',
+            diagnostics: ''
+          }];
+          return updatedMessages;
+        }
+        // Add a new error message
+        return [...prevMessages, { 
+          type: 'assistant', 
+          text: 'An error occurred during translation. Please try again.', 
+          chinese: '',
+          diagnostics: ''
+        }];
       });
     } finally {
       setIsLoading(false);
@@ -197,6 +206,12 @@ const Translation = () => {
           <div key={index} className={`message ${msg.type}`}>
             <div className="message-content">{msg.text}</div>
             {msg.chinese && <div className="message-content chinese"><br />{msg.chinese}</div>}
+            {msg.diagnostics && (
+              <div className="message-diagnostics">
+                <hr />
+                <pre>{msg.diagnostics}</pre>
+              </div>
+            )}
           </div>
         ))}
         {isLoading && (

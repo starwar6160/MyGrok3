@@ -24,6 +24,7 @@ logger = logging_config.configure_logger(__name__)
 # === React 静态页面托管 ===
 app = Flask(__name__, static_folder="frontend/build", template_folder="templates")
 app.secret_key = 'your_secret_key'  # Replace with a real secret key
+app.config['JSON_AS_ASCII'] = False
 
 # 允许跨域
 try:
