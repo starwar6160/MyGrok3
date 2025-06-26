@@ -3,7 +3,16 @@ import './Translation.css';
 
 const Translation = () => {
   const [inputText, setInputText] = useState('');
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    try {
+      const savedMessages = localStorage.getItem('translation_messages');
+      return savedMessages ? JSON.parse(savedMessages) : [];
+    } catch (error) {
+      console.error('Failed to load messages from local storage:', error);
+      localStorage.removeItem('translation_messages'); // Clear corrupted data
+      return [];
+    }
+  });
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
@@ -13,6 +22,19 @@ const Translation = () => {
 
   useEffect(() => {
     scrollToBottom()
+  }, [messages]);
+
+  // Save messages to local storage whenever they change
+  useEffect(() => {
+    try {
+      if (messages.length === 0) {
+        localStorage.removeItem('translation_messages');
+      } else {
+        localStorage.setItem('translation_messages', JSON.stringify(messages));
+      }
+    } catch (error) {
+      console.error('Failed to save messages to local storage:', error);
+    }
   }, [messages]);
 
   const handleCopyAll = () => {
@@ -52,6 +74,7 @@ const Translation = () => {
   const handleNewConversation = () => {
     setMessages([]);
     setInputText('');
+    // The useEffect hook will handle clearing local storage
   };
 
   const handleSendMessage = async () => {
