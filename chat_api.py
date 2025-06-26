@@ -7,7 +7,7 @@ from flask import Blueprint, request, Response, stream_with_context, jsonify, g
 from typing import Dict, List, Any, Generator
 
 from session_store import get_session_store
-from chat_handler import generate_chat_response, FinalStats
+from chat_handler import generate_chat_response, FinalStats, generate_title
 from conversation_utils import summarize_history
 from cost_calculator import estimate_cost, CostTracker
 from response_utils import get_token_count
@@ -129,37 +129,35 @@ def api_chat():
 @chat_bp.route('/api/title_summary', methods=['POST'])
 def api_title_summary():
     """
-    Generate a title and summary for the conversation.
+    Generate a title for the conversation.
     
     Returns:
-        JSON with title and summary
+        JSON with title
     """
     data = request.json
     history = data.get('messages', [])
     
-    if not history:
-        return jsonify({"title": "", "summary": ""})
+    if len(history) < 2: # Don't generate title for very short conversations
+        return jsonify({"title": "新会话", "summary": ""})
     
     # Get session ID from Flask g object
     session_id = getattr(g, 'session_id', 'default')
     
-    # Generate title and summary using a model
-    # For now, returning placeholders (would use LLM model in real implementation)
-    sample_title = "Generated Title"
-    sample_summary = "Generated Summary"
+    # Generate title using the new handler function
+    generated_title = generate_title(history)
     
-    # Update the session metadata with title and summary
+    # Update the session metadata with title
     store = get_session_store()
-    metadata = store.get_session(session_id).get('metadata', {})
-    metadata.update({
-        "title": sample_title,
-        "summary": sample_summary
-    })
+    session_data = store.get_session(session_id)
+    metadata = session_data.get('metadata', {})
+    metadata['title'] = generated_title
     store.update_session(session_id, metadata=metadata)
     
+    logger.info(f"Updated title for session {session_id} to '{generated_title}'")
+    
     return jsonify({
-        "title": sample_title,
-        "summary": sample_summary
+        "title": generated_title,
+        "summary": "" # Summary is not implemented
     })
 
 

@@ -15,6 +15,7 @@ from conversation_utils import validate_messages
 from cost_calculator import CostTracker, estimate_cost
 from response_utils import get_token_count
 import logging_config
+from models_config import TITLE_MODEL
 
 logger = logging_config.configure_logger(__name__)
 
@@ -129,6 +130,50 @@ def ask_llm(
         error_msg = f"Error in non-streaming response: {str(e)}"
         logger.error(error_msg)
         return {"error": error_msg}
+
+
+def generate_title(history: List[Dict[str, str]]) -> str:
+    """
+    Generates a concise title for a conversation history.
+
+    Args:
+        history: The list of messages in the conversation.
+
+    Returns:
+        A short title for the conversation.
+    """
+    if not history:
+        return "新会话"
+
+    # Create a prompt for the title generation model
+    # We'll use the last 6 messages to keep the prompt concise
+    history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history[-6:]])
+    
+    prompt = f"""请根据以下对话内容，生成一个五个词以内的、简洁明了的中文标题。请只返回标题本身，不要包含任何多余的文字或标点符号，例如引号。
+
+对话内容:
+---
+{history_text}
+---
+"""
+    
+    messages = [{"role": "user", "content": prompt}]
+    
+    try:
+        # Using a smaller, faster model for title generation
+        response = ask_llm(model=TITLE_MODEL, messages=messages)
+        if response and response.choices:
+            title = response.choices[0].message.content.strip()
+            # Clean up the title, removing quotes or other artifacts
+            title = title.replace('"', '').replace("'", "").replace("标题：", "").strip()
+            logger.info(f"Generated title: '{title}'")
+            return title if title else "新会话"
+        else:
+            logger.warning("Title generation returned no choices.")
+            return "新会话"
+    except Exception as e:
+        logger.error(f"Error generating title: {e}")
+        return "新会话"
 
 
 def generate_chat_response(
