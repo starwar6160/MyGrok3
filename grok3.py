@@ -6,6 +6,7 @@ import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
 from MyGrok3.translation_api import init_translation_api
+from MyGrok3.chat_api import register_blueprint as register_chat_blueprint
 from MyGrok3.cost_calculator import CostTracker, initialize_prices
 from MyGrok3.chat_handler import generate_chat_response, FinalStats
 from MyGrok3.session_store import get_session_store
@@ -335,169 +336,7 @@ def serve_index_with_config():
 def index():
     return serve_index_with_config()
 
-@app.route("/api/title_summary", methods=["POST"])
-def api_title_summary():
-    data = request.get_json()
-    session_id = g.session_id
-    messages = data.get("messages", [])
-    
-    prompt = (
-        "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
-        + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
-    )
-    prompt_messages = [{"role": "user", "content": prompt}]
 
-    try:
-        completion = client.chat.completions.create(
-            model="google/gemini-flash-1.5",  # Use a cheap, fast model for titles
-            messages=prompt_messages,
-            stream=False
-        )
-        
-        title = (completion.choices[0].message.content or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
-
-        # Manually track cost for this specific call and update the session
-        if completion.usage:
-            input_tokens = completion.usage.prompt_tokens
-            output_tokens = completion.usage.completion_tokens
-            
-            # Use a temporary CostTracker to calculate cost for this call
-            temp_tracker = CostTracker()
-            temp_tracker.update_from_usage("google/gemini-flash-1.5", completion.usage)
-            cost_delta = temp_tracker.estimated_cost
-            
-            # Update the central session store
-            store = get_session_store()
-            store.update_stats(
-                session_id,
-                token_delta=(input_tokens + output_tokens),
-                cost_delta=cost_delta
-            )
-
-        return jsonify({"title": title or "新会话"})
-
-    except Exception as e:
-        logger.error(f"Error in api_title_summary: {e}", exc_info=True)
-        # Return a default title to prevent UI errors
-        return jsonify({"title": "新会话"})
-
-@app.route('/api/chat', methods=['POST'])
-def api_chat():
-
-
-    if 'cost_tracker' not in g:
-        g.cost_tracker = CostTracker()
-    
-    # Get request data
-    data = request.get_json()
-    question = data.get('question', '')
-    selected_model = data.get('model', 'gpt-3.5-turbo')
-    history = data.get('history', [])
-    conversation_id = data.get('conversation_id', 'unknown')
-    
-    if DEBUG_MESSAGES:
-        # 仅打印有限的消息信息，不打印完整历史记录
-        debug_data = {
-            'question_length': len(question) if isinstance(question, str) else 0,
-            'model': selected_model,
-            'history_length': len(history) if isinstance(history, list) else 0,
-            'conversation_id': conversation_id
-        }
-        print('[FLASK] /api/chat received:', debug_data)
-    try:
-        data = request.get_json()
-        if not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON format"}), 400
-            
-        question = data.get("question", "")
-        if not isinstance(question, str):
-            return jsonify({"error": "Question must be a string"}), 400
-        question = question.strip()
-        
-        selected_model = data.get("model", "x-ai/grok-3-mini")
-        if not isinstance(selected_model, str):
-            selected_model = "x-ai/grok-3-mini"
-        # 验证模型是否在允许列表中
-        if selected_model not in MODELS and selected_model != DEFAULT_MODEL:
-            selected_model = DEFAULT_MODEL
-        
-        history = data.get("history", [])
-        if not isinstance(history, list):
-            history = []
-            
-        conversation_id = data.get("conversation_id")
-        if not isinstance(conversation_id, str) or not conversation_id:
-            conversation_id = "default"
-        # 防止路径遍历攻击
-        conversation_id = conversation_id.replace("/", "").replace("\\", "")[:50]
-    except Exception as e:
-        return jsonify({"error": f"Invalid request format: {str(e)[:100]}"}), 400
-    if not question:
-        return jsonify({"error": "Please enter a question."}), 400
-    # 拼接历史+当前
-    history.append({"role": "user", "content": question})
-    messages = summarize_history(history, max_chars=2000)
-    # 保存用户消息
-    import time
-    
-    if DEBUG_MESSAGES:
-        logger.debug(f"[api_chat] question_length={len(question)}")
-        logger.debug(f"[api_chat] model={selected_model!r}")
-        logger.debug(f"[api_chat] history_count={len(history)}")
-
-    @stream_with_context
-    def response_generator():
-        final_stats = None
-        try:
-            # Yield content chunks from the main chat handler
-            for chunk in generate_chat_response(selected_model, messages):
-                if isinstance(chunk, str):
-                    yield chunk
-                elif isinstance(chunk, FinalStats):
-                    final_stats = chunk
-                    break  # Final stats received, exit loop to process them
-
-            if final_stats:
-                # With the request context still alive, update the session
-                store = get_session_store()
-                if hasattr(g, 'session_id') and g.session_id:
-                    session_id = g.session_id
-                    logger.warning(f"[API_CHAT] Session ID {session_id}: Updating and finalizing stats.")
-                    
-                    # Update session store with the stats of THIS request
-                    store.update_stats(
-                        session_id,
-                        token_delta=final_stats.input_tokens + final_stats.output_tokens, 
-                        cost_delta=final_stats.estimated_cost
-                    )
-                    session_data = store.get_session(session_id)
-                    logger.warning(f"[API_CHAT] Fetched session data: {session_data}")
-
-                    # Create a cost_tracker to generate the final footer
-                    cost_tracker = CostTracker()
-                    # This tracker holds the cost/tokens for the CURRENT response
-                    cost_tracker.update(final_stats.input_tokens, final_stats.output_tokens, final_stats.estimated_cost)
-                    # These attributes hold the CUMULATIVE data for the whole session
-                    cost_tracker.session_cumulative_token = session_data.get('token_count', 0)
-                    cost_tracker.session_cumulative_cost = session_data.get('total_cost', 0.0)
-
-                    diagnostics = cost_tracker.get_diagnostic_info(
-                        model_name=final_stats.model_name,
-                        output_text=final_stats.full_answer,
-                        is_debug=True
-                    )
-                    if diagnostics:
-                        yield f"\n\n---\n{diagnostics}"
-                else:
-                    logger.error("[API_CHAT] No session_id found in g. Could not persist stats.")
-            else:
-                logger.error("[API_CHAT] FinalStats object not received from generator.")
-
-        except Exception as e:
-            logger.error(f"Error in response_generator: {e}", exc_info=True)
-            yield f"\n\nError: {e}"
-
-    return Response(response_generator(), mimetype='text/plain')
 
 @app.route('/<path:path>')
 def serve_react_app(path):
@@ -511,6 +350,9 @@ def serve_react_app(path):
 
 
 import socket
+
+# Register Chat API blueprint
+register_chat_blueprint(app)
 
 # Initialize translation API routes
 init_translation_api(app)

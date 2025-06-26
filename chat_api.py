@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Generator
 from MyGrok3.session_store import get_session_store
 from MyGrok3.chat_handler import generate_chat_response, FinalStats
 from MyGrok3.conversation_utils import summarize_history
-from MyGrok3.cost_calculator import estimate_cost
+from MyGrok3.cost_calculator import estimate_cost, CostTracker
 from MyGrok3.response_utils import get_token_count
 from MyGrok3 import logging_config
 
@@ -125,6 +125,23 @@ def api_chat():
                 f"Tokens: {final_stats_obj.input_tokens + final_stats_obj.output_tokens}, "
                 f"Cost: ${final_stats_obj.estimated_cost:.6f}"
             )
+
+            # Create a cost_tracker to generate the final footer
+            session_data = store.get_session(session_id)
+            cost_tracker = CostTracker()
+            # This tracker holds the cost/tokens for the CURRENT response
+            cost_tracker.update(final_stats_obj.input_tokens, final_stats_obj.output_tokens, final_stats_obj.estimated_cost)
+            # These attributes hold the CUMULATIVE data for the whole session
+            cost_tracker.session_cumulative_token = session_data.get('token_count', 0)
+            cost_tracker.session_cumulative_cost = session_data.get('total_cost', 0.0)
+
+            diagnostics = cost_tracker.get_diagnostic_info(
+                model_name=final_stats_obj.model_name,
+                output_text=final_stats_obj.full_answer,
+                is_debug=True
+            )
+            if diagnostics:
+                yield f"\n\n---\n{diagnostics}"
     
     return Response(
         stream_with_context(streaming_with_stats()),
