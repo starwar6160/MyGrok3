@@ -7,7 +7,7 @@ from flask import Blueprint, request, Response, stream_with_context, jsonify, g
 from typing import Dict, List, Any, Generator
 
 from MyGrok3.session_store import get_session_store
-from MyGrok3.chat_handler import generate_chat_response
+from MyGrok3.chat_handler import generate_chat_response, FinalStats
 from MyGrok3.conversation_utils import summarize_history
 from MyGrok3.cost_calculator import estimate_cost
 from MyGrok3.response_utils import get_token_count
@@ -94,47 +94,37 @@ def api_chat():
     # Create streaming response
     def streaming_with_stats() -> Generator[str, None, None]:
         """Generate streaming response and track stats."""
-        full_answer = ''
-        input_tokens = 0
-        output_tokens = 0
-        
-        # Calculate input tokens
-        input_tokens = sum(
-            get_token_count(msg.get('content', '')) 
-            for msg in messages if isinstance(msg, dict)
-        )
-        
-        # Stream the response
-        for chunk in generate_chat_response(selected_model, messages):
-            full_answer += chunk
-            yield chunk
-        
-        # After completion, calculate tokens and update stats
-        output_tokens = get_token_count(full_answer)
-        total_tokens = input_tokens + output_tokens
-        estimated_cost = estimate_cost(selected_model, input_tokens, output_tokens)
-        
-        # Update session statistics in the store
-        store.update_stats(
-            session_id=session_id, 
-            model=selected_model,
-            tokens_in=input_tokens,
-            tokens_out=output_tokens,
-            cost=estimated_cost
-        )
-        
-        # Add assistant response to history
-        store.add_message(session_id, {
-            "role": "assistant",
-            "content": full_answer
-        })
-        
-        logger.debug(
-            f"Chat completed for session {session_id}. "
-            f"Model: {selected_model}, "
-            f"Tokens: {total_tokens}, "
-            f"Cost: ${estimated_cost:.6f}"
-        )
+        final_stats_obj = None
+
+        # Stream the response and get final stats
+        for item in generate_chat_response(selected_model, messages):
+            if isinstance(item, str):
+                yield item
+            elif isinstance(item, FinalStats):
+                final_stats_obj = item
+
+        # After streaming, update session with final stats
+        if final_stats_obj:
+            store.update_stats(
+                session_id=session_id, 
+                model=final_stats_obj.model_name,
+                tokens_in=final_stats_obj.input_tokens,
+                tokens_out=final_stats_obj.output_tokens,
+                cost=final_stats_obj.estimated_cost
+            )
+            
+            # Add assistant response to history
+            store.add_message(session_id, {
+                "role": "assistant",
+                "content": final_stats_obj.full_answer
+            })
+            
+            logger.debug(
+                f"Chat completed for session {session_id}. "
+                f"Model: {final_stats_obj.model_name}, "
+                f"Tokens: {final_stats_obj.input_tokens + final_stats_obj.output_tokens}, "
+                f"Cost: ${final_stats_obj.estimated_cost:.6f}"
+            )
     
     return Response(
         stream_with_context(streaming_with_stats()),
@@ -179,7 +169,7 @@ def api_title_summary():
     })
 
 
-@chat_bp.route('/api/sessions/stats', methods=['GET'])
+@chat_bp.route('/api/session_stats', methods=['GET'])
 def api_session_stats():
     """
     Get statistics for the current session and global usage.

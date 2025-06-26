@@ -11,7 +11,8 @@ class TestPriceManager(unittest.TestCase):
             "gpt-4": {"input": 10.0, "output": 30.0},
             "gpt-3.5-turbo": {"input": 1.5, "output": 2.0}
         }
-        self.manager = PriceManager(self.price_data)
+        self.manager = PriceManager()
+        self.manager.update_prices(self.price_data)
     
     def test_get_model_price(self):
         """Test getting prices for known and unknown models."""

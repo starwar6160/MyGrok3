@@ -182,7 +182,7 @@ class TestSessionStore(unittest.TestCase):
         # Should have 10 threads * 100 updates each = 1000 total updates
         self.assertEqual(session["requests_count"], 1000)
         self.assertEqual(session["token_count"], 2000)  # 1 in + 1 out per update
-        self.assertEqual(session["total_cost"], 0.1)  # 0.0001 per update
+        self.assertAlmostEqual(session["total_cost"], 0.1, places=7)  # 0.0001 per update
         
         # Should have entries for all 10 models
         for i in range(10):

@@ -8,3 +8,4 @@ venv/*
 logs/*
 
 tests/__pycache__/*
+utils/__pycache__/*

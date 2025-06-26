@@ -114,31 +114,42 @@ class SessionStore:
     def update_stats(
         self, 
         session_id: str, 
-        token_delta: int = 0,
-        cost_delta: float = 0.0
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        cost: float = 0.0,
+        model: Optional[str] = None
     ) -> None:
         """
-        Update token and cost statistics for a session.
+        Update token, cost, and model usage statistics for a session.
 
         Args:
             session_id: Unique identifier for the session.
-            token_delta: The number of tokens to add to the session's total.
-            cost_delta: The cost to add to the session's total.
+            tokens_in: The number of input tokens.
+            tokens_out: The number of output tokens.
+            cost: The cost of the request.
+            model: The name of the model used for the request.
         """
         with self._lock:
             session = self.get_session(session_id)
+            token_delta = tokens_in + tokens_out
             
-            # Update session stats
-            session["token_count"] = session.get("token_count", 0) + token_delta
-            session["total_cost"] = session.get("total_cost", 0.0) + cost_delta
+            session["token_count"] += token_delta
+            session["total_cost"] += cost
             session["requests_count"] += 1
             session["last_active"] = datetime.now().isoformat()
-            
+
             # Update global stats
             self._global_stats["total_tokens"] += token_delta
-            self._global_stats["total_cost"] += cost_delta
+            self._global_stats["total_cost"] += cost
             self._global_stats["requests_count"] += 1
             self._global_stats["last_updated"] = datetime.now().isoformat()
+
+            # Update model usage stats
+            if model:
+                if "models_used" not in session:
+                    session["models_used"] = {}
+                session["models_used"][model] = session["models_used"].get(model, 0) + 1
+                self._global_stats["models_usage"][model] = self._global_stats["models_usage"].get(model, 0) + 1
     
     def get_global_stats(self) -> Dict[str, Any]:
         """
