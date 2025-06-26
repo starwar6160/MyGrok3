@@ -82,19 +82,19 @@ class CostTracker:
                 Format cost with appropriate units based on its value.
 
                 - If cost is effectively zero, return "0".
-                - If cost is less than 0.01 cents ($0.0001), display in integer nanocents (1e-9 units).
+                - If cost is less than 0.01 cents ($0.0001), display in integer picocents (1e-12 units).
                 - Otherwise, display in cents with two decimal places.
                 """
-                if abs(cost_usd) < 1e-12:
+                if abs(cost_usd) < 1e-15: # Use a smaller threshold for picodollar precision
                     return "0"
                 
                 cents = cost_usd * 100
                 if cents < 0.01:
-                    nanocents = cost_usd * 1_000_000_000
-                    # If nanocents would round to 0, but the cost is non-zero, show 1 to indicate a small cost.
-                    if round(nanocents) == 0:
+                    picodollars = cost_usd * 1_000_000_000_000
+                    # If picodollars would round to 0, but the cost is non-zero, show 1 to indicate a small cost.
+                    if round(picodollars) == 0 and cost_usd > 0:
                         return "1"
-                    return f"{int(round(nanocents))}"
+                    return f"{int(round(picodollars))}"
                 else:
                     return f"{cents:.2f}美分"
 
@@ -170,6 +170,7 @@ def estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> flo
         logger.debug(f"[ESTIMATE_COST] Available price keys: {price_keys[:5]}...")
 
     model_price = price_manager.get_model_price(model_name)
+    logger.debug(f"[ESTIMATE_COST] Price for model '{model_name}': {model_price}")
     if model_price.get('input', 0) == 0 and model_price.get('output', 0) == 0:
         logger.warning(f"[ESTIMATE_COST] Price for model '{model_name}' is zero.")
 

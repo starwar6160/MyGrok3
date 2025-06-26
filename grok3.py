@@ -6,7 +6,7 @@ import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
 from MyGrok3.translation_api import init_translation_api
-from MyGrok3.cost_calculator import CostTracker
+from MyGrok3.cost_calculator import CostTracker, initialize_prices
 from MyGrok3.chat_handler import generate_chat_response, FinalStats
 from MyGrok3.session_store import get_session_store
 from MyGrok3.openrouter_manager import (
@@ -30,6 +30,10 @@ try:
     CORS(app)
 except ImportError:
     pass  # 如果没装CORS，先不报错
+
+# Initialize expensive resources once at startup
+get_session_store()
+initialize_prices()
 
 # Before request handler to set session_id
 @app.before_request
@@ -334,23 +338,53 @@ def index():
 @app.route("/api/title_summary", methods=["POST"])
 def api_title_summary():
     data = request.get_json()
-    if DEBUG_MESSAGES:
-        print('[FLASK] /api/title_summary received:', data)
+    session_id = g.session_id
     messages = data.get("messages", [])
+    
     prompt = (
         "请根据以下对话内容，自动归纳一个简明、概括性的标题（10字以内），只返回标题本身，不要加任何解释：\n"
         + '\n'.join(f"[{m.get('role','')}] {m.get('content','')}" for m in messages)
     )
-    title = ask_grok("google/gemini-flash-1.5", [{"role": "user", "content": prompt}])
-    # 只取前10字，去除空白
-    title = (title or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
-    if DEBUG_MESSAGES:
-        print('[FLASK] /api/title_summary response:', title)
-    return jsonify({"title": title or "新会话"})
+    prompt_messages = [{"role": "user", "content": prompt}]
+
+    try:
+        completion = client.chat.completions.create(
+            model="google/gemini-flash-1.5",  # Use a cheap, fast model for titles
+            messages=prompt_messages,
+            stream=False
+        )
+        
+        title = (completion.choices[0].message.content or "新会话").strip().replace("\n", "").replace("：", ":")[:10]
+
+        # Manually track cost for this specific call and update the session
+        if completion.usage:
+            input_tokens = completion.usage.prompt_tokens
+            output_tokens = completion.usage.completion_tokens
+            
+            # Use a temporary CostTracker to calculate cost for this call
+            temp_tracker = CostTracker()
+            temp_tracker.update_from_usage("google/gemini-flash-1.5", completion.usage)
+            cost_delta = temp_tracker.estimated_cost
+            
+            # Update the central session store
+            store = get_session_store()
+            store.update_stats(
+                session_id,
+                token_delta=(input_tokens + output_tokens),
+                cost_delta=cost_delta
+            )
+
+        return jsonify({"title": title or "新会话"})
+
+    except Exception as e:
+        logger.error(f"Error in api_title_summary: {e}", exc_info=True)
+        # Return a default title to prevent UI errors
+        return jsonify({"title": "新会话"})
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
-    # Initialize cost tracker for this request
+
+
     if 'cost_tracker' not in g:
         g.cost_tracker = CostTracker()
     
