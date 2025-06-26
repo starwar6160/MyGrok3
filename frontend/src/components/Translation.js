@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import './Translation.css';
 
 const Translation = () => {
@@ -14,7 +15,21 @@ const Translation = () => {
     }
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    fetch('/api/models')
+      .then(res => res.json())
+      .then(data => {
+        setModels(data.models);
+        if (data.default_model) {
+          setSelectedModel(data.default_model);
+        }
+      })
+      .catch(error => console.error('Failed to fetch models:', error));
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -92,7 +107,7 @@ const Translation = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text: currentInput, stream: true }),
+        body: JSON.stringify({ text: currentInput, stream: true, model: selectedModel }),
       });
 
       const reader = response.body.getReader();
@@ -165,6 +180,18 @@ const Translation = () => {
 
   return (
     <div className="translation-container">
+       <div className="header">
+        <Link to="/" className="home-link">Home</Link>
+        <select 
+          className="model-selector"
+          value={selectedModel} 
+          onChange={(e) => setSelectedModel(e.target.value)}
+        >
+          {models.map(model => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+      </div>
       <div className="chat-window">
         {messages.map((msg, index) => (
           <div key={index} className={`message ${msg.type}`}>
@@ -189,8 +216,6 @@ const Translation = () => {
         <button onClick={handleSendMessage} disabled={isLoading}>
           Send
         </button>
-      </div>
-      <div className="chat-actions">
         <button onClick={handleCopyAll}>Copy All</button>
         <button onClick={handleNewConversation}>New Conversation</button>
       </div>

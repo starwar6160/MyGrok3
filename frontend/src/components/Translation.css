@@ -7,6 +7,34 @@
   box-sizing: border-box;
 }
 
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  border-bottom: 1px solid #ddd;
+  background-color: #f8f9fa;
+}
+
+.home-link {
+  text-decoration: none;
+  color: #007bff;
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.home-link:hover {
+  text-decoration: underline;
+}
+
+.model-selector {
+  padding: 8px 12px;
+  border-radius: 18px;
+  border: 1px solid #ddd;
+  font-size: 14px;
+  background-color: white;
+}
+
 .chat-window {
   flex-grow: 1;
   overflow-y: auto;
@@ -44,6 +72,7 @@
 
 .input-area {
   display: flex;
+  align-items: center;
   padding: 10px;
   border-top: 1px solid #ddd;
 }
@@ -55,7 +84,6 @@
   border: 1px solid #ddd;
   resize: none;
   font-size: 16px;
-  margin-right: 10px;
   max-height: 100px;
 }
 
@@ -67,10 +95,35 @@
   padding: 10px 20px;
   cursor: pointer;
   font-size: 16px;
+  margin-left: 10px;
+  white-space: nowrap;
 }
 
 .input-area button:disabled {
   background-color: #a0c8f0;
+}
+
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .input-area {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .input-area textarea {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .input-area button {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 
 @media (max-width: 600px) {

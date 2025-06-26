@@ -186,6 +186,17 @@ def api_title_summary():
     })
 
 
+@chat_bp.route('/api/models', methods=['GET'])
+def api_models():
+    """
+    Get the list of available models.
+    
+    Returns:
+        JSON with the model list
+    """
+    return jsonify({"models": MODELS, "default_model": DEFAULT_MODEL})
+
+
 @chat_bp.route('/api/session_stats', methods=['GET'])
 def api_session_stats():
     """
