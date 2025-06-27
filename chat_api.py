@@ -27,9 +27,10 @@ USE_STABLE_MODELS = False
 
 # Model configurations - moved here from grok3.py/routes.py
 from models_config import MODELS_EXPERIMENTAL, MODELS_STABLE
+from config import DEFAULT_MODEL
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
-DEFAULT_MODEL = MODELS[0]
+
 
 
 @chat_bp.route('/api/chat', methods=['POST'])

@@ -16,7 +16,7 @@ from conversation_utils import validate_messages
 from cost_calculator import CostTracker, estimate_cost
 from response_utils import get_token_count
 import logging_config
-from models_config import TITLE_MODEL
+from config import TITLE_MODEL
 
 logger = logging_config.configure_logger(__name__)
 

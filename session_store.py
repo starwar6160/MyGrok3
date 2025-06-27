@@ -11,9 +11,11 @@ import time
 from datetime import datetime
 import json
 import os
+import sqlite3
 from collections import defaultdict
 
 import logging_config
+from config import CLEANUP_MAX_AGE_HOURS, CLEANUP_MIN_MESSAGES
 logger = logging_config.configure_logger(__name__)
 
 try:
@@ -24,12 +26,17 @@ except ImportError:
 # --- In-Memory Session Store ---
 
 class InMemorySessionStore:
+    DB_FILE = "sessions.db"
     """Thread-safe in-memory session data store."""
 
     def __init__(self):
         self._lock = threading.RLock()
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._global_stats = self._default_global_stats()
+        self._init_db()
+        self._load_from_db()
+        self._persistence_thread = threading.Thread(target=self._persistence_loop, daemon=True)
+        self._persistence_thread.start()
         self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self._cleanup_thread.start()
 
@@ -93,6 +100,66 @@ class InMemorySessionStore:
         with self._lock:
             return dict(self._global_stats)
 
+    def _init_db(self):
+        with sqlite3.connect(self.DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    session_data TEXT NOT NULL,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.commit()
+
+    def _load_from_db(self):
+        try:
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_id, session_data FROM sessions")
+                rows = cursor.fetchall()
+                with self._lock:
+                    for row in rows:
+                        session_id, session_data_json = row
+                        try:
+                            self._sessions[session_id] = json.loads(session_data_json)
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to decode session data for {session_id}")
+            logger.info(f"Loaded {len(self._sessions)} sessions from SQLite.")
+        except sqlite3.Error as e:
+            logger.error(f"Error loading sessions from SQLite: {e}")
+
+    def _persistence_loop(self):
+        while True:
+            time.sleep(300)  # Persist every 5 minutes
+            try:
+                with self._lock:
+                    sessions_to_save = list(self._sessions.items())
+                
+                if not sessions_to_save:
+                    continue
+
+                with sqlite3.connect(self.DB_FILE) as conn:
+                    cursor = conn.cursor()
+                    data_to_upsert = [
+                        (sid, json.dumps(sdata), datetime.now()) 
+                        for sid, sdata in sessions_to_save
+                    ]
+                    cursor.executemany('''
+                        INSERT INTO sessions (session_id, session_data, last_updated)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            session_data = excluded.session_data,
+                            last_updated = excluded.last_updated;
+                    ''', data_to_upsert)
+                    conn.commit()
+                logger.info(f"Persisted {len(sessions_to_save)} sessions to SQLite.")
+            except sqlite3.Error as e:
+                logger.error(f"Error persisting sessions to SQLite: {e}")
+            except Exception as e:
+                logger.error(f"An unexpected error occurred in the persistence loop: {e}")
+
+
     def get_all_sessions(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
             return dict(self._sessions)
@@ -114,7 +181,7 @@ class InMemorySessionStore:
                     for session_id, session in self._sessions.items():
                         created_at = datetime.fromisoformat(session.get("created_at"))
                         msg_count = len(session.get("messages", []))
-                        if (now - created_at).total_seconds() > 8 * 3600 and msg_count < 5:
+                        if (now - created_at).total_seconds() > CLEANUP_MAX_AGE_HOURS * 3600 and msg_count < CLEANUP_MIN_MESSAGES:
                             to_delete.append(session_id)
                     
                     for session_id in to_delete:
@@ -204,7 +271,7 @@ class RedisSessionStore(InMemorySessionStore):
                     session = json.loads(session_data)
                     created_at = datetime.fromisoformat(session.get("created_at"))
                     msg_count = len(session.get("messages", []))
-                    if (now - created_at).total_seconds() > 8 * 3600 and msg_count < 5:
+                    if (now - created_at).total_seconds() > CLEANUP_MAX_AGE_HOURS * 3600 and msg_count < CLEANUP_MIN_MESSAGES:
                         to_delete.append(key)
                 
                 if to_delete:

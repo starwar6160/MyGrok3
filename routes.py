@@ -27,9 +27,10 @@ USE_STABLE_MODELS = os.environ.get('USE_STABLE_MODELS') == 'true'
 
 # Model configurations
 from models_config import MODELS_EXPERIMENTAL, MODELS_STABLE
+from config import DEFAULT_MODEL
 
 MODELS = MODELS_STABLE if USE_STABLE_MODELS else MODELS_EXPERIMENTAL
-DEFAULT_MODEL = MODELS[0]
+
 
 # Create the main Blueprint
 main_bp = Blueprint('main', __name__)

@@ -5,6 +5,7 @@ import time
 import threading
 import redis
 import json
+from config import SESSION_EXPIRATION_SECONDS
 from collections import defaultdict
 from cost_calculator import CostTracker
 
@@ -21,12 +22,12 @@ class SessionManager:
             session_data_json = self.redis_client.get(f"session:{session_id}")
             if session_data_json is None:
                 session_data = {'messages': [], 'cost_tracker': CostTracker().to_dict(), 'last_accessed': time.time()}  # Initialize with default
-                self.redis_client.setex(f"session:{session_id}", 86400, json.dumps(session_data))  # Set 24-hour expiration
+                self.redis_client.setex(f"session:{session_id}", SESSION_EXPIRATION_SECONDS, json.dumps(session_data))  # Set 24-hour expiration
             else:
                 session_data = json.loads(session_data_json)
                 session_data['cost_tracker'] = CostTracker.from_dict(session_data['cost_tracker'])
                 session_data['last_accessed'] = time.time()
-                self.redis_client.setex(f"session:{session_id}", 86400, json.dumps(session_data))  # Update timestamp
+                self.redis_client.setex(f"session:{session_id}", SESSION_EXPIRATION_SECONDS, json.dumps(session_data))  # Update timestamp
             return session_data
 
 # Singleton instance
