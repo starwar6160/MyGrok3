@@ -22,7 +22,7 @@ SESSION_EXPIRATION_SECONDS = 86400
 
 # The maximum age (in hours) of a conversation before it's considered for cleanup.
 # Conversations older than this will be deleted if they have too few messages.
-CLEANUP_MAX_AGE_HOURS = 6
+CLEANUP_MAX_AGE_HOURS = 1
 
 # The minimum number of messages a conversation must have to be kept,
 # even if it is older than CLEANUP_MAX_AGE_HOURS.

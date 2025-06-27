@@ -164,12 +164,14 @@ export default function App() {
     }
   }, [currentId, conversations]);
 
-  console.log('[RENDER] conversations:', conversations);
-  console.log('[RENDER] currentId:', currentId);
-  console.log('[RENDER] localStorage.grok3_conversations:', localStorage.getItem('grok3_conversations'));
-  console.log('[RENDER] localStorage.grok3_current_id:', localStorage.getItem('grok3_current_id'));
-
-
+  useEffect(() => {
+    if (process.env.DEBUG_RENDER === 'true') {
+      console.log('[STATE CHANGE] conversations:', conversations);
+      console.log('[STATE CHANGE] currentId:', currentId);
+      console.log('[STATE CHANGE] localStorage.grok3_conversations:', localStorage.getItem('grok3_conversations'));
+      console.log('[STATE CHANGE] localStorage.grok3_current_id:', localStorage.getItem('grok3_current_id'));
+    }
+  }, [conversations, currentId]);
 
   // 新建会话
   const addConversation = () => {

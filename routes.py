@@ -158,6 +158,30 @@ def api_chat():
         mimetype='text/plain'
     )
 
+# API route for conversation
+@main_bp.route('/api/conversation/<string:session_id>', methods=['GET'])
+def get_conversation(session_id):
+    """
+    Fetch the full conversation thread for a given session ID.
+    
+    Args:
+        session_id: The ID of the session to retrieve
+    
+    Returns:
+        JSON with the conversation data, including messages, tokens, and timestamps
+    """
+    from session_store import get_session_store  # Import session store
+    store = get_session_store()
+    session_data = store.get_session(session_id)
+    
+    if not session_data:
+        return jsonify({
+            "error": "Session not found"
+        }), 404
+    
+    # Return the session data as JSON
+    return jsonify(session_data)
+
 # Route for serving static React files
 @main_bp.route('/<path:path>')
 def serve_react_app(path):

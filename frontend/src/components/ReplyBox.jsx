@@ -33,6 +33,14 @@ function splitByPunctuation(text) {
   }, []).filter(Boolean);
 }
 
+// Truncate response to first ~100 tokens (approx 500 characters) for brevity
+function truncateResponse(text) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  return text.length > 500 ? text.substring(0, 500) + '...' : text;
+}
+
 export default function ReplyBox({ content }) {
   let mainContent = content;
   let diagnostics = null;
@@ -111,7 +119,7 @@ export default function ReplyBox({ content }) {
             // 正文分句渲染
             let text = part.text;
             const sentences = splitByPunctuation(text);
-            return sentences.map((sent, j) => sent.trim() ? <span key={i+"-"+j} style={{display:'block',whiteSpace:'pre-wrap',marginBottom:4}}>{sent}</span> : null);
+            return sentences.map((sent, j) => sent.trim() ? <span key={i+"-"+j} style={{display:'block',whiteSpace:'pre-wrap',marginBottom:4}}>{truncateResponse(sent)}</span> : null);
           }
         })}
         {diagnostics && (

@@ -9,3 +9,4 @@ logs/*
 
 tests/__pycache__/*
 utils/__pycache__/*
+sessions.db

@@ -6,10 +6,9 @@ services:
     volumes:
       - .:/app
     environment:
-      - FLASK_ENV=development
-      - USE_REDIS=${USE_REDIS:-false}  # Keep Redis optional
+      - FLASK_ENV=development      
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - USE_STABLE_MODELS=${USE_STABLE_MODELS:-false} 
+      - USE_STABLE_MODELS=${USE_STABLE_MODELS:-true} 
     command: flask run --host=0.0.0.0 --port=5000  # Use Flask dev server for auto-reload
   redis:
     image: redis:7
