@@ -8,6 +8,7 @@ import openai
 import os
 from typing import Dict, List, Any, Generator, Optional, Union
 import time
+import datetime
 from dataclasses import dataclass
 
 from cache_manager import get_from_cache, add_to_cache
@@ -45,7 +46,7 @@ DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 def ask_llm_stream(
     model: str, 
     messages: List[Dict[str, str]]
-) -> Generator[Union[str, FinalStats], None, None]:
+) -> Generator[Union[str, Any], None, None]:
     """
     Send messages to LLM with streaming response and return final usage data.
 
@@ -58,7 +59,7 @@ def ask_llm_stream(
         - The final CompletionUsage object with token counts
     """
     validated_messages = validate_messages(messages)
-    
+    usage_data = None
     if DEBUG_MESSAGES:
         logger.debug(f"Streaming request to model {model}")
         logger.debug(f"Message count: {len(validated_messages)}")
@@ -70,19 +71,17 @@ def ask_llm_stream(
             stream=True
         )
         
-        completion_usage = None
         for chunk in response:
             if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                yield content
-            # The 'usage' field is only present in the final chunk
+                yield chunk.choices[0].delta.content
             if chunk.usage:
-                completion_usage = chunk.usage
-
-        # After the loop, yield the final usage object
-        if completion_usage:
-            logger.info(f"[ask_grok] token usage: {completion_usage}")
-            yield completion_usage
+                usage_data = chunk.usage
+        # Add timestamp at the end of the stream
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H-%M")
+        logger.debug(f"Timestamp yielded: | Timestamp: {timestamp}")
+        yield f" | Timestamp: {timestamp}"
+        if usage_data:
+            yield usage_data  # Yield usage data after timestamp
                 
     except Exception as e:
         error_msg = f"Error in streaming response: {str(e)}"

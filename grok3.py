@@ -5,6 +5,7 @@ import json
 import tiktoken
 from flask import Flask, render_template, request, Response, stream_with_context, send_from_directory, jsonify, g
 from pathlib import Path
+import datetime
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -250,6 +251,9 @@ def ask_grok_stream(model, messages):
         for chunk in response:
             if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+        # Add timestamp at the end of the stream
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H-%M")
+        yield f" | Timestamp: {timestamp}"
     except openai.NotFoundError as e:
         yield f"API Error: {e}"
     except Exception as e:
@@ -267,7 +271,9 @@ def ask_grok(model, messages):
         if DEBUG_MESSAGES:
             print(f"[ask_grok] response content length={len(response.choices[0].message.content)}")
         print(f"[ask_grok] token usage: {response.usage}")
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        timestamp = datetime.datetime.now().strftime("%m-%d-%H-%M")
+        return f"{content} | Timestamp: {timestamp}"
     except openai.NotFoundError as e:
         if DEBUG_MESSAGES:
             print(f"[ask_grok] NotFoundError: {e}")

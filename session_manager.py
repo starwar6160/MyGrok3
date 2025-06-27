@@ -3,6 +3,8 @@ Session management module for handling user session data with thread safety.
 """
 import time
 import threading
+import redis
+import json
 from collections import defaultdict
 from cost_calculator import CostTracker
 
@@ -10,38 +12,22 @@ class SessionManager:
     """Thread-safe session storage with automatic cleanup."""
     
     def __init__(self):
+        self.redis_client = redis.Redis(host='redis', port=6379, db=0)  # Use 'redis' service name from docker-compose
         self._lock = threading.Lock()
-        self._store = defaultdict(dict)  # Format: {session_id: {'messages': [], 'cost_tracker': CostTracker, 'last_accessed': timestamp}}
-        self._start_cleanup_thread()
     
     def get_session(self, session_id):
         """Get or create session data for given session_id."""
         with self._lock:
-            if session_id not in self._store:
-                self._store[session_id] = {
-                    'messages': [],
-                    'cost_tracker': CostTracker(),
-                    'last_accessed': time.time()
-                }
+            session_data_json = self.redis_client.get(f"session:{session_id}")
+            if session_data_json is None:
+                session_data = {'messages': [], 'cost_tracker': CostTracker().to_dict(), 'last_accessed': time.time()}  # Initialize with default
+                self.redis_client.setex(f"session:{session_id}", 86400, json.dumps(session_data))  # Set 24-hour expiration
             else:
-                self._store[session_id]['last_accessed'] = time.time()
-            return self._store[session_id]
-    
-    def cleanup_old_sessions(self, max_age_seconds=86400):
-        """Clean up sessions older than max_age_seconds."""
-        current_time = time.time()
-        with self._lock:
-            for session_id in list(self._store.keys()):
-                if current_time - self._store[session_id].get('last_accessed', 0) > max_age_seconds:
-                    del self._store[session_id]
-    
-    def _start_cleanup_thread(self):
-        """Start background thread for periodic session cleanup."""
-        cleanup_thread = threading.Thread(
-            target=lambda: [time.sleep(3600), self.cleanup_old_sessions()],
-            daemon=True
-        )
-        cleanup_thread.start()
+                session_data = json.loads(session_data_json)
+                session_data['cost_tracker'] = CostTracker.from_dict(session_data['cost_tracker'])
+                session_data['last_accessed'] = time.time()
+                self.redis_client.setex(f"session:{session_id}", 86400, json.dumps(session_data))  # Update timestamp
+            return session_data
 
 # Singleton instance
 session_manager = SessionManager()

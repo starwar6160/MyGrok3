@@ -125,6 +125,27 @@ class CostTracker:
             logger.error(f"Failed to generate diagnostics: {e}")
             return f"|Error generating diagnostics: {str(e)}|"
 
+    def to_dict(self):
+        return {
+            'input_tokens': self._input_tokens,
+            'output_tokens': self._output_tokens,
+            'cost': self._cost,
+            'session_cumulative_token': self.session_cumulative_token,
+            'session_cumulative_cost': self.session_cumulative_cost,
+            'model_name': self._model_name
+        }
+
+    @staticmethod
+    def from_dict(data):
+        ct = CostTracker()
+        ct._input_tokens = data['input_tokens']
+        ct._output_tokens = data['output_tokens']
+        ct._cost = data['cost']
+        ct.session_cumulative_token = data['session_cumulative_token']
+        ct.session_cumulative_cost = data['session_cumulative_cost']
+        ct._model_name = data['model_name']
+        return ct
+
 
 class PriceManager:
     """Manages loading and accessing model price data with lazy initialization."""
@@ -218,4 +239,3 @@ def initialize_prices(force_refresh: bool = False):
 
     except Exception as e:
         logger.error(f"[PRICE INIT] Exception during price initialization: {e}", exc_info=True)
-
