@@ -11,12 +11,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
+# Copy and make entrypoint script executable
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Expose port
 EXPOSE 5000
 
 # Define environment variable for Flask
 ENV FLASK_APP=grok3.py
 ENV FLASK_RUN_HOST=0.0.0.0
+ENV FLASK_ENV=production
+# Default to production
 
-# Runtime entrypoint
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "grok3:app"]
+# Set entrypoint
+ENTRYPOINT ["./docker-entrypoint.sh"]

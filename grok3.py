@@ -62,7 +62,6 @@ client = openai.OpenAI(
 DEBUG_MESSAGES = os.environ.get('DEBUG_MESSAGES') == 'true'
 
 
-
 #screen -D -r 2304929
 #USE_STABLE_MODELS=false FLASK_APP=grok3.py flask run -p 5005 -h 0.0.0.0
 # Flag to switch between experimental and stable model lists

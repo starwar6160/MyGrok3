@@ -1,0 +1,14 @@
+version: '3'
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    environment:
+      - FLASK_ENV=development
+      - USE_REDIS=${USE_REDIS:-false}  # Keep Redis optional
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - USE_STABLE_MODELS=${USE_STABLE_MODELS:-true} 
+    command: flask run --host=0.0.0.0 --port=5000  # Use Flask dev server for auto-reload
