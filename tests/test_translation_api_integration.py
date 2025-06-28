@@ -96,17 +96,24 @@ class TranslationApiIntegrationTest(unittest.TestCase):
         self.assertIn("diagnostics", response_data['response'])
         self.assertEqual(mock_ask_llm.call_count, 3)
 
-    @patch('translation_api._stream_processing_generator')
+    @patch('translation_api._unified_processing_generator')
     def test_process_with_english_model_stream(self, mock_processing_generator):
         """Test the /api/process-with-english-model endpoint in streaming mode."""
-        # Mock the inner generator that produces the content for all steps
+        # Mock the new unified generator that yields strings and FinalStats
         def mock_generator(*args, **kwargs):
+            # Step 1
             yield "--- [步骤 1: 将问题翻译为英文] ---\n"
+            yield FinalStats("translation-model", 10, 5, 0.001, "Hello")
             yield "Hello\n\n"
+            # Step 2
             yield "--- [步骤 2: 使用英文模型处理] ---\n"
-            yield "Hi there, how can I help?\n\n"
+            yield "Hi there, "
+            yield "how can I help?\n\n"
+            yield FinalStats("english-model", 20, 10, 0.002, "Hi there, how can I help?")
+            # Step 3
             yield "--- [步骤 3: 将回复翻译回中文] ---\n"
             yield "你好，我能怎么帮你？"
+            yield FinalStats("translation-model", 15, 10, 0.0015, "你好，我能怎么帮你？")
 
         mock_processing_generator.return_value = mock_generator()
 
