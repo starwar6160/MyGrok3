@@ -1,6 +1,6 @@
 nohup.out
 __pycache__/*.pyc
-chat_*.db
+*.db
 data/*
 openrouter_model_prices.json
 static/*
@@ -9,4 +9,4 @@ logs/*
 
 tests/__pycache__/*
 utils/__pycache__/*
-sessions.db
+

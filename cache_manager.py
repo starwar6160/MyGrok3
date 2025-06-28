@@ -8,15 +8,18 @@ import hashlib
 import json
 import time
 from typing import Dict, Any, Optional
+import sqlite3
+import threading
+import logging_config
 
-# Configuration
+# --- Configuration ---
 LLM_CACHE_MAX_SIZE = 1000  # Maximum cache entries
 LLM_CACHE_EXPIRY_SECONDS = 3600  # Cache expiry time (1 hour)
+DB_FILE = "llm_cache.db"
 
-# Simple in-memory cache
-# Structure: {cache_key: {"response": response_obj, "timestamp": creation_time}}
-llm_cache: Dict[str, Dict[str, Any]] = {}
+logger = logging_config.configure_logger(__name__)
 
+# --- Helper Functions ---
 
 def get_cache_key(model: str, messages: list) -> str:
     """
@@ -29,9 +32,141 @@ def get_cache_key(model: str, messages: list) -> str:
     Returns:
         A SHA-256 hash as a hex string for the cache key
     """
-    key_src = model + json.dumps(messages, ensure_ascii=False)
-    return hashlib.sha256(key_src.encode('utf-8')).hexdigest()
+    # Sort keys in messages to ensure consistent JSON string
+    try:
+        key_src = model + json.dumps(messages, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(key_src.encode('utf-8')).hexdigest()
+    except Exception as e:
+        logger.error(f"Error generating cache key: {e}")
+        # Fallback for un-serializable messages
+        key_src = model + str(messages)
+        return hashlib.sha256(key_src.encode('utf-8')).hexdigest()
 
+
+# --- SQLite Cache Manager ---
+
+class SQLiteCacheManager:
+    """Manages LLM response caching using an SQLite database for persistence."""
+
+    def __init__(self, db_file: str, max_size: int, expiry_seconds: int):
+        self.db_file = db_file
+        self.max_size = max_size
+        self.expiry_seconds = expiry_seconds
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _init_db(self):
+        """Initialize the database and create the cache table if it doesn't exist."""
+        with self._lock:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS llm_cache (
+                        cache_key TEXT PRIMARY KEY,
+                        response TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL
+                    )
+                ''')
+                conn.commit()
+
+    def get(self, model: str, messages: list) -> Optional[Dict[str, Any]]:
+        """Retrieve a cached response if it exists and is not expired."""
+        cache_key = get_cache_key(model, messages)
+        with self._lock:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT response, timestamp FROM llm_cache WHERE cache_key = ?",
+                    (cache_key,)
+                )
+                row = cursor.fetchone()
+
+                if row:
+                    response_json, timestamp = row
+                    if time.time() - timestamp < self.expiry_seconds:
+                        logger.debug(f"Cache HIT for key: {cache_key[:10]}...")
+                        try:
+                            return json.loads(response_json)
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to decode cached JSON for key {cache_key}")
+                            # Corrupt data, delete it
+                            self.delete(cache_key)
+                            return None
+                    else:
+                        # Expired, delete it
+                        logger.debug(f"Cache EXPIRED for key: {cache_key[:10]}...")
+                        self.delete(cache_key)
+        
+        logger.debug(f"Cache MISS for key: {cache_key[:10]}...")
+        return None
+
+    def add(self, model: str, messages: list, response: Any):
+        """Add a response to the cache."""
+        cache_key = get_cache_key(model, messages)
+        response_json = json.dumps(response, ensure_ascii=False)
+        current_time = int(time.time())
+
+        with self._lock:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO llm_cache (cache_key, response, timestamp)
+                    VALUES (?, ?, ?)
+                    """,
+                    (cache_key, response_json, current_time)
+                )
+                conn.commit()
+                logger.debug(f"Cache ADD for key: {cache_key[:10]}...")
+        
+        # Clean up after adding to ensure cache size is maintained
+        self.clean()
+
+    def delete(self, cache_key: str):
+        """Deletes a specific entry from the cache."""
+        with self._lock:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM llm_cache WHERE cache_key = ?", (cache_key,))
+                conn.commit()
+
+    def clean(self):
+        """Clean expired entries and enforce cache size limit."""
+        with self._lock:
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
+                
+                # 1. Delete expired entries
+                expired_time = int(time.time()) - self.expiry_seconds
+                cursor.execute("DELETE FROM llm_cache WHERE timestamp < ?", (expired_time,))
+                
+                # 2. Enforce max size by deleting the oldest entries
+                cursor.execute("SELECT COUNT(*) FROM llm_cache")
+                count = cursor.fetchone()[0]
+                
+                if count > self.max_size:
+                    num_to_delete = count - self.max_size
+                    # Find the oldest `num_to_delete` entries and delete them
+                    cursor.execute(
+                        """
+                        DELETE FROM llm_cache WHERE cache_key IN (
+                            SELECT cache_key FROM llm_cache ORDER BY timestamp ASC LIMIT ?
+                        )
+                        """,
+                        (num_to_delete,)
+                    )
+                    logger.info(f"Cache limit exceeded. Removed {num_to_delete} oldest entries.")
+
+                conn.commit()
+
+
+# --- Singleton Instance and Public Functions ---
+
+_cache_manager_instance = SQLiteCacheManager(
+    db_file=DB_FILE,
+    max_size=LLM_CACHE_MAX_SIZE,
+    expiry_seconds=LLM_CACHE_EXPIRY_SECONDS
+)
 
 def get_from_cache(model: str, messages: list) -> Optional[Dict[str, Any]]:
     """
@@ -44,12 +179,7 @@ def get_from_cache(model: str, messages: list) -> Optional[Dict[str, Any]]:
     Returns:
         The cached response or None if not found or expired
     """
-    clean_expired_cache()
-    cache_key = get_cache_key(model, messages)
-    
-    if cache_key in llm_cache:
-        return llm_cache[cache_key]["response"]
-    return None
+    return _cache_manager_instance.get(model, messages)
 
 
 def add_to_cache(model: str, messages: list, response: Any) -> None:
@@ -61,41 +191,4 @@ def add_to_cache(model: str, messages: list, response: Any) -> None:
         messages: The message history/context
         response: The LLM response to cache
     """
-    clean_expired_cache()
-    cache_key = get_cache_key(model, messages)
-    
-    # Add to cache with timestamp
-    llm_cache[cache_key] = {
-        "response": response,
-        "timestamp": time.time()
-    }
-
-
-def clean_expired_cache() -> None:
-    """
-    Clean expired entries from the cache and limit cache size.
-    """
-    global llm_cache
-    current_time = time.time()
-    
-    # Delete expired cache entries
-    expired_keys = [
-        key for key, value in llm_cache.items() 
-        if current_time - value.get("timestamp", 0) > LLM_CACHE_EXPIRY_SECONDS
-    ]
-    
-    for key in expired_keys:
-        del llm_cache[key]
-    
-    # Limit cache size by removing oldest entries if needed
-    if len(llm_cache) > LLM_CACHE_MAX_SIZE:
-        # Sort by timestamp (oldest first)
-        sorted_keys = sorted(
-            llm_cache.keys(), 
-            key=lambda k: llm_cache[k].get("timestamp", 0)
-        )
-        
-        # Remove oldest entries to bring size within limit
-        keys_to_remove = sorted_keys[:len(llm_cache) - LLM_CACHE_MAX_SIZE]
-        for key in keys_to_remove:
-            del llm_cache[key]
+    _cache_manager_instance.add(model, messages, response)
