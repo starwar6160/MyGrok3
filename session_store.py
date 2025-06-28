@@ -41,7 +41,7 @@ class InMemorySessionStore:
             "total_tokens": 0,
             "total_cost": 0.0,
             "requests_count": 0,
-            "models_usage": defaultdict(int),
+            "models_usage": {},
             "last_updated": datetime.now().isoformat(),
         }
 
@@ -99,36 +99,80 @@ class InMemorySessionStore:
 
     def update_stats(self, session_id: str, tokens_in: int = 0, tokens_out: int = 0, cost: float = 0.0, model: Optional[str] = None) -> None:
         with self._lock:
+            # First, update session-specific stats
             session = self.get_session(session_id)
-            session["token_count"] = session.get("token_count", 0) + tokens_in + tokens_out
-            session["total_cost"] = session.get("total_cost", 0.0) + cost
-            session["requests_count"] = session.get("requests_count", 0) + 1
+            session["token_count"] += tokens_in + tokens_out
+            session["total_cost"] += cost
+            session["requests_count"] += 1
             if model:
-                if "models_used" not in session:
-                    session["models_used"] = {}
                 session["models_used"][model] = session["models_used"].get(model, 0) + 1
             self.update_session(session_id, **session)
 
-            # Global stats would need a separate persistence mechanism if required.
-            # For now, we remove the direct update to simplify.
-            pass
+            # Then, update global stats in a separate transaction
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("BEGIN")
+                    cursor.execute("SELECT value FROM global_stats WHERE key = 'stats'")
+                    row = cursor.fetchone()
+                    if row:
+                        global_stats = json.loads(row[0])
+                    else:
+                        global_stats = self._default_global_stats()
+
+                    global_stats["total_tokens"] += tokens_in + tokens_out
+                    global_stats["total_cost"] += cost
+                    global_stats["requests_count"] += 1
+                    if model:
+                        global_stats["models_usage"][model] = global_stats["models_usage"].get(model, 0) + 1
+                    global_stats["last_updated"] = datetime.now().isoformat()
+
+                    cursor.execute(
+                        "UPDATE global_stats SET value = ? WHERE key = ?",
+                        (json.dumps(global_stats), 'stats')
+                    )
+                    conn.commit()
+                except sqlite3.Error as e:
+                    conn.rollback()
+                    logger.error(f"Database error in update_stats: {e}")
 
     def get_global_stats(self) -> Dict[str, Any]:
-        # This should be re-implemented to pull from a persistent store if needed.
-        logger.warning("get_global_stats is returning a default, non-persistent value.")
-        return self._default_global_stats()
+        with self._lock:
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM global_stats WHERE key = 'stats'")
+                row = cursor.fetchone()
+                if row:
+                    return json.loads(row[0])
+                return self._default_global_stats()
 
     def _init_db(self):
-        with sqlite3.connect(self.DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    session_data TEXT NOT NULL,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            conn.commit()
+        with self._lock:
+            with sqlite3.connect(self.DB_FILE, detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+                cursor = conn.cursor()
+                # Create sessions table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        session_id TEXT PRIMARY KEY,
+                        session_data TEXT NOT NULL,
+                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                # Create global stats table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS global_stats (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )
+                ''')
+                # Initialize global stats if not present
+                cursor.execute("SELECT value FROM global_stats WHERE key = 'stats'")
+                if cursor.fetchone() is None:
+                    cursor.execute(
+                        "INSERT INTO global_stats (key, value) VALUES (?, ?)",
+                        ('stats', json.dumps(self._default_global_stats()))
+                    )
+                conn.commit()
 
 
 
@@ -202,6 +246,12 @@ def get_session_store():
                 logger.info("Initializing InMemorySessionStore with SQLite backend.")
                 _instance = InMemorySessionStore()
     return _instance
+
+def _reset_session_store_for_testing():
+    """Reset the singleton instance for testing purposes."""
+    global _instance
+    with _instance_lock:
+        _instance = None
 
 # Alias for backwards compatibility
 store = get_session_store()

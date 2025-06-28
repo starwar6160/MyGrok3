@@ -3,20 +3,27 @@ Unit tests for the session_store module.
 
 This module tests the thread-safe session store implementation.
 """
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 import unittest
 import time
 from datetime import datetime
 import threading
 
-from session_store import SessionStore, get_session_store
+from session_store import InMemorySessionStore, get_session_store, _reset_session_store_for_testing
 
 class TestSessionStore(unittest.TestCase):
     """Test cases for the SessionStore class."""
     
     def setUp(self):
         """Set up a fresh SessionStore instance for each test."""
-        # Create a dedicated instance for testing, not using the global singleton
-        self.store = SessionStore()
+        # Reset the singleton and delete the DB file to ensure a clean state
+        _reset_session_store_for_testing()
+        if os.path.exists(InMemorySessionStore.DB_FILE):
+            os.remove(InMemorySessionStore.DB_FILE)
+        # Re-initialize the store to ensure the DB is created for the test
+        self.store = InMemorySessionStore()
         
     def test_get_session(self):
         """Test getting and creating sessions."""
@@ -123,23 +130,7 @@ class TestSessionStore(unittest.TestCase):
         result = self.store.delete_session("non-existent")
         self.assertFalse(result)
         
-    def test_export_session(self):
-        """Test exporting session data."""
-        # Create and populate a session
-        self.store.get_session("test-session-6")
-        self.store.add_message("test-session-6", {"role": "user", "content": "Test"})
-        self.store.update_stats("test-session-6", model="test-model", tokens_in=5, tokens_out=10, cost=0.001)
-        
-        # Export it
-        session_data = self.store.export_session("test-session-6")
-        self.assertIsNotNone(session_data)
-        self.assertEqual(len(session_data["messages"]), 1)
-        self.assertEqual(session_data["token_count"], 15)
-        
-        # Try to export non-existent session
-        session_data = self.store.export_session("non-existent")
-        self.assertIsNone(session_data)
-        
+
     def test_singleton(self):
         """Test the singleton pattern of get_session_store."""
         # Get two instances

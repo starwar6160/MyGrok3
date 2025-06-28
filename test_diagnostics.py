@@ -1,6 +1,9 @@
 """
 Tests for diagnostics decorators and utilities.
 """
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 import unittest
 import json
 from unittest.mock import MagicMock, patch
@@ -26,7 +29,7 @@ class TestResponseFormatter(unittest.TestCase):
         self.assertEqual(formatted['choices'][0]['message']['content'], 'Hey|DIAG|')
 
 class TestTrackMetricsDecorator(unittest.TestCase):
-    @patch('MyGrok3.diagnostics.session_manager')
+    @patch('diagnostics.session_manager')
     def test_track_metrics(self, mock_session):
         """Test the metrics tracking decorator with proper Flask context."""
         # Setup mock session and response

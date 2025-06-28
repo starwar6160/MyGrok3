@@ -4,9 +4,9 @@ Chat API blueprint for MyGrok3.
 This module implements chat-related API endpoints as a Flask Blueprint.
 """
 from flask import Blueprint, request, Response, stream_with_context, jsonify, g
+from session_store import store, get_session_store
 from typing import Dict, List, Any, Generator
 
-from session_store import get_session_store
 from chat_handler import generate_chat_response, FinalStats, generate_title
 from conversation_utils import summarize_history
 from cost_calculator import estimate_cost, CostTracker
