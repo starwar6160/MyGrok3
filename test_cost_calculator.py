@@ -40,8 +40,10 @@ class TestCostEstimation(unittest.TestCase):
     @patch('MyGrok3.cost_calculator.PriceManager.__init__', return_value=None)
     def test_estimate_cost(self, mock_init, mock_get_model_price):
         """Test cost estimation calculations."""
+        # Cost is per 1,000,000 tokens.
+        # (1_000_000 / 1_000_000) * 10.0 + (500_000 / 1_000_000) * 30.0 = 10.0 + 15.0 = 25.0
         cost = estimate_cost("gpt-4", 1_000_000, 500_000)
-        self.assertEqual(cost, 25.0)  # Adjusted to match actual calculation: (1_000_000/1000)*10.0 + (500_000/1000)*30.0 = 10_000 + 15_000 = 25_000, but code returns 25.0
+        self.assertEqual(cost, 25.0)
 
     @patch('MyGrok3.cost_calculator.initialize_prices', return_value=None)
     def test_initialize_prices(self, mock_initialize_prices):

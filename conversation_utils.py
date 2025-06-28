@@ -4,30 +4,7 @@ Conversation utilities for handling message history and summaries.
 This module provides functions for managing conversation history, including
 summarization to keep context within token limits.
 """
-import tiktoken
 from typing import List, Dict, Any
-
-# Encoding for token counting
-def get_encoder():
-    """Get the appropriate tokenizer."""
-    try:
-        return tiktoken.encoding_for_model("gpt-4")
-    except KeyError:
-        return tiktoken.get_encoding("cl100k_base")
-
-
-def get_token_count(text: str) -> int:
-    """
-    Count the number of tokens in a text string.
-    
-    Args:
-        text: The text to analyze
-        
-    Returns:
-        Token count as an integer
-    """
-    encoder = get_encoder()
-    return len(encoder.encode(text))
 
 
 def summarize_history(
