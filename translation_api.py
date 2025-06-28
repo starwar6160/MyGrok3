@@ -3,12 +3,11 @@ Translation API implementation.
 """
 import logging
 from typing import Dict, Any
-import os
 import json
-import tiktoken
-from flask import Blueprint, request, jsonify, Response, stream_with_context, g
-import openai
-from datetime import datetime, timedelta
+from flask import Blueprint, request, jsonify, Response, stream_with_context
+
+# Import shared components
+from chat_handler import client, ask_llm, generate_chat_response, FinalStats
 from cost_calculator import CostTracker
 from response_utils import get_token_count
 from cost_calculator import estimate_cost
@@ -20,16 +19,6 @@ translation_cost_tracker = CostTracker()
 
 # Create a Blueprint for translation routes
 translation_bp = Blueprint('translation', __name__)
-
-# Configure the OpenRouter API client
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY environment variable not set")
-
-client = openai.OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=openai_api_key
-)
 
 # Define models
 from models_config import TRANSLATION_MODEL, ENGLISH_MODEL
@@ -69,110 +58,77 @@ def api_translate():
         stream = data.get('stream', False)
         
         if stream:
-            # For streaming response
-            def generate():
+            # Use the shared generator for streaming responses
+            def stream_generator():
+                final_stats_obj = None
                 try:
-                    response = client.chat.completions.create(
-                        model=TRANSLATION_MODEL,
-                        messages=messages,
-                        max_tokens=2000,
-                        temperature=0.3,
-                        stream=True
-                    )
-                    
-                    # Buffers for content and tracking
-                    buffer = ""
-                    input_tokens = sum(get_token_count(msg.get('content', '')) for msg in messages)
-                    output_tokens = 0
-                    
-                    for chunk in response:
-                        if not chunk.choices:
-                            continue
-                            
-                        # Get the content if available
-                        if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
-                            content = chunk.choices[0].delta.content
-                            buffer += content
-                            output_tokens = get_token_count(buffer)  # Update output token count
-                            
-                            # Yield the content as it comes
-                            yield f"data: {json.dumps({'content': content})}\n\n"
-                    
-                    # Calculate final token counts and costs
-                    output_tokens = get_token_count(buffer)
-                    estimated_cost = estimate_cost(TRANSLATION_MODEL, input_tokens, output_tokens)
-                    
-                    # Update cost tracker
-                    translation_cost_tracker.update(input_tokens, output_tokens, estimated_cost)
-                    
-                    # After streaming content, send the diagnostics as a final, separate chunk
-                    diagnostics = translation_cost_tracker.get_diagnostic_info(
-                        model_name=TRANSLATION_MODEL,
-                        input_text=text,
-                        output_text=buffer,
-                        is_debug=True
-                    )
-                    if diagnostics:
-                        diag_content = f"\n\n---\n{diagnostics}"
-                        yield f"data: {json.dumps({'content': diag_content}, ensure_ascii=False)}\n\n"
+                    # Stream the response and get final stats
+                    for item in generate_chat_response(TRANSLATION_MODEL, messages):
+                        if isinstance(item, str):
+                            # Yield content chunks as SSE
+                            yield f"data: {json.dumps({'content': item})}\n\n"
+                        elif isinstance(item, FinalStats):
+                            final_stats_obj = item
 
-                    # Send a final message to indicate completion
-                    yield "data: [DONE]\n\n"
-                    
+                    # After streaming, process the final stats
+                    if final_stats_obj:
+                        # Update the dedicated cost tracker for the translation API
+                        translation_cost_tracker.update(
+                            final_stats_obj.input_tokens,
+                            final_stats_obj.output_tokens,
+                            final_stats_obj.estimated_cost
+                        )
+
+                        # Generate diagnostics footer
+                        diagnostics = translation_cost_tracker.get_diagnostic_info(
+                            model_name=TRANSLATION_MODEL,
+                            output_text=final_stats_obj.full_answer,
+                            is_debug=True
+                        )
+                        if diagnostics:
+                            diag_content = f"\n\n---\n{diagnostics}"
+                            yield f"data: {json.dumps({'content': diag_content}, ensure_ascii=False)}\n\n"
+
                 except Exception as e:
                     error_msg = f"Error during streaming: {str(e)}"
-                    print(error_msg)  # Log the error
+                    logger.error(error_msg)
                     yield f"data: {json.dumps({'error': error_msg})}\n\n"
-                    yield "data: [DONE]\n\n"
-            
-            # Create a streaming response with proper SSE headers
-            def stream_response():
-                try:
-                    for chunk in generate():
-                        yield chunk
-                except Exception as e:
-                    print(f"Error in stream: {str(e)}")
-                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 finally:
+                    # Send a final message to indicate completion on the client side
                     yield "data: [DONE]\n\n"
-            
-            # Create and return the response with proper headers
-            response = Response(
-                stream_response(),
+
+            return Response(
+                stream_with_context(stream_generator()),
                 mimetype='text/event-stream',
                 headers={
                     'Cache-Control': 'no-cache',
                     'Connection': 'keep-alive',
-                    'X-Accel-Buffering': 'no',
-                    'Access-Control-Allow-Origin': '*',
-                    'Transfer-Encoding': 'chunked'
+                    'X-Accel-Buffering': 'no'
                 }
             )
-            return response
         else:
-            # For non-streaming response (backward compatibility)
-            response = client.chat.completions.create(
-                model=TRANSLATION_MODEL,
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.3,
-                stream=False
-            )
+            # For non-streaming response, use the shared ask_llm function for caching
+            response = ask_llm(model=TRANSLATION_MODEL, messages=messages)
+
+            # Handle potential errors from ask_llm
+            if "error" in response:
+                return jsonify({'error': response["error"]}), 500
+            
+            if not response.choices:
+                return jsonify({'error': 'API returned no choices.'}), 500
             
             translated_text = response.choices[0].message.content
             
-            # Calculate tokens and costs
-            input_tokens = sum(get_token_count(msg.get('content', '')) for msg in messages)
-            output_tokens = get_token_count(translated_text)
+            # Get token counts from the response object for accuracy
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
             estimated_cost = estimate_cost(TRANSLATION_MODEL, input_tokens, output_tokens)
             
             # Update cost tracker
             translation_cost_tracker.update(input_tokens, output_tokens, estimated_cost)
             
-            # Get diagnostic info
             diagnostics = translation_cost_tracker.get_diagnostic_info(
                 model_name=TRANSLATION_MODEL,
-                input_text='',  # Don't include input in response
                 output_text=translated_text,
                 is_debug=True
             )
@@ -188,12 +144,178 @@ def api_translate():
                     'input_tokens': input_tokens,
                     'output_tokens': output_tokens,
                     'estimated_cost': estimated_cost,
-                    'cumulative_cost': translation_cost_tracker.total_cost
+                    'cumulative_cost': translation_cost_tracker.cost
                 }
             })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def _handle_non_stream_processing(user_input, conversation_history, contains_chinese):
+    """
+    Handles the three-step translation and processing for non-streaming requests
+    by calling the shared ask_llm function.
+    """
+    cost_tracker = CostTracker()
+    translated_input = user_input
+
+    # Step 1: Translate to English if necessary
+    if contains_chinese:
+        logger.info("[TRANSLATION_DEBUG] (Non-stream) Translating Chinese input to English")
+        translate_messages = [
+            {"role": "system", "content": "You are an expert translator specializing in seamless English-Chinese and Chinese-English translation."},
+            {"role": "user", "content": user_input}
+        ]
+        translate_response = ask_llm(TRANSLATION_MODEL, translate_messages)
+        logger.debug(f"Received response from ask_llm for translation (type: {type(translate_response)}).")
+
+        # Robustly check for errors or invalid responses
+        is_error = False
+        if isinstance(translate_response, dict) and "error" in translate_response:
+            is_error = True
+            err_msg = translate_response.get("error")
+            logger.error(f"ask_llm returned an error dictionary: {err_msg}")
+        elif not hasattr(translate_response, 'choices') or not translate_response.choices:
+            is_error = True
+            err_msg = "API returned no choices or an invalid response object."
+            logger.error(f"ask_llm returned invalid response: {translate_response}")
+        if is_error:
+            raise Exception(f"Translation to English failed: {err_msg}")
+        
+        translated_input = translate_response.choices[0].message.content
+        cost = estimate_cost(TRANSLATION_MODEL, translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens)
+        cost_tracker.update(translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens, cost)
+        logger.info(f"[TRANSLATION_DEBUG] (Non-stream) Translated to: '{translated_input[:30]}...'")
+
+    # Step 2: Get response from the English-only model
+    logger.info("[TRANSLATION_DEBUG] (Non-stream) Calling English model")
+    english_messages = [{"role": "system", "content": "You are a helpful assistant that only responds in English."}]
+    english_messages.extend(conversation_history)
+    english_messages.append({"role": "user", "content": translated_input})
+
+    english_response = ask_llm(ENGLISH_MODEL, english_messages)
+    logger.debug(f"Received response from ask_llm for English model (type: {type(english_response)}).")
+
+    # Robustly check for errors or invalid responses
+    is_error_en = False
+    if isinstance(english_response, dict) and "error" in english_response:
+        is_error_en = True
+        err_msg = english_response.get("error")
+    elif not hasattr(english_response, 'choices') or not english_response.choices:
+        is_error_en = True
+        err_msg = "API returned no choices or an invalid response object."
+    if is_error_en:
+        raise Exception(f"English model processing failed: {err_msg}")
+
+    english_output = english_response.choices[0].message.content
+    cost = estimate_cost(ENGLISH_MODEL, english_response.usage.prompt_tokens, english_response.usage.completion_tokens)
+    cost_tracker.update(english_response.usage.prompt_tokens, english_response.usage.completion_tokens, cost)
+
+    final_output = english_output
+
+    # Step 3: Back-translate to Chinese if necessary
+    if contains_chinese:
+        logger.info("[TRANSLATION_DEBUG] (Non-stream) Back-translating to Chinese")
+        back_translate_messages = [
+            {"role": "system", "content": "Translate to Chinese."},
+            {"role": "user", "content": english_output}
+        ]
+        back_translate_response = ask_llm(TRANSLATION_MODEL, back_translate_messages)
+        logger.debug(f"Received response from ask_llm for back-translation (type: {type(back_translate_response)}).")
+
+        # Robustly check for errors or invalid responses
+        is_error_back = False
+        if isinstance(back_translate_response, dict) and "error" in back_translate_response:
+            is_error_back = True
+            err_msg = back_translate_response.get("error")
+        elif not hasattr(back_translate_response, 'choices') or not back_translate_response.choices:
+            is_error_back = True
+            err_msg = "API returned no choices or an invalid response object."
+        
+        if is_error_back:
+            final_output += f"\n\n[Back-translation to Chinese failed: {err_msg}]"
+            logger.warning(f"Back-translation failed: {err_msg}")
+        else:
+            final_output = back_translate_response.choices[0].message.content
+            cost = estimate_cost(TRANSLATION_MODEL, back_translate_response.usage.prompt_tokens, back_translate_response.usage.completion_tokens)
+            cost_tracker.update(back_translate_response.usage.prompt_tokens, back_translate_response.usage.completion_tokens, cost)
+            
+    return final_output, cost_tracker
+
+def _stream_processing_generator(user_input, conversation_history, contains_chinese, cost_tracker):
+    """
+    Generator that handles the multi-step streaming translation process and updates a cost tracker.
+    Yields content chunks for the streaming response.
+    """
+    translated_input = user_input
+    english_output = ""
+
+    # --- Step 1: Translate to English (non-streaming) ---
+    if contains_chinese:
+        logger.info("[TRANSLATION_DEBUG] (Stream) Translating Chinese input to English")
+        translate_messages = [
+            {"role": "system", "content": "You are an expert translator specializing in seamless English-Chinese and Chinese-English translation."},
+            {"role": "user", "content": user_input}
+        ]
+        translate_response = ask_llm(TRANSLATION_MODEL, translate_messages)
+        logger.debug(f"Received response from ask_llm for translation (type: {type(translate_response)}).")
+
+        # Robustly check for errors or invalid responses
+        is_error = False
+        if isinstance(translate_response, dict) and "error" in translate_response:
+            is_error = True
+            err_msg = translate_response.get("error")
+        elif not hasattr(translate_response, 'choices') or not translate_response.choices:
+            is_error = True
+            err_msg = "API returned no choices or an invalid response object."
+        if is_error:
+            yield f"\n\n[Error during translation to English: {err_msg}]"
+            return
+
+        translated_input = translate_response.choices[0].message.content
+        cost = estimate_cost(TRANSLATION_MODEL, translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens)
+        cost_tracker.update(translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens, cost)
+        yield f"[Translated query to English]: {translated_input}\n\n"
+
+    # --- Step 2: Get response from the English-only model (streaming) ---
+    logger.info("[TRANSLATION_DEBUG] (Stream) Calling English model")
+    english_messages = [{"role": "system", "content": "You are a helpful assistant that only responds in English."}]
+    english_messages.extend(conversation_history)
+    english_messages.append({"role": "user", "content": translated_input})
+
+    english_final_stats = None
+    for item in generate_chat_response(ENGLISH_MODEL, english_messages):
+        if isinstance(item, str):
+            english_output += item
+            yield item
+        elif isinstance(item, FinalStats):
+            english_final_stats = item
+
+    if english_final_stats:
+        cost_tracker.update(english_final_stats.input_tokens, english_final_stats.output_tokens, english_final_stats.estimated_cost)
+    else:
+        logger.warning("[TRANSLATION_DEBUG] (Stream) Did not receive FinalStats from English model.")
+
+    # --- Step 3: Back-translate to Chinese (if necessary, streaming) ---
+    if contains_chinese:
+        logger.info("[TRANSLATION_DEBUG] (Stream) Back-translating to Chinese")
+        yield "\n\n[Translating response to Chinese...]\n"
+        back_translate_messages = [
+            {"role": "system", "content": "Translate to Chinese."},
+            {"role": "user", "content": english_output}
+        ]
+        
+        back_translate_final_stats = None
+        for item in generate_chat_response(TRANSLATION_MODEL, back_translate_messages):
+            if isinstance(item, str):
+                yield item
+            elif isinstance(item, FinalStats):
+                back_translate_final_stats = item
+        
+        if back_translate_final_stats:
+            cost_tracker.update(back_translate_final_stats.input_tokens, back_translate_final_stats.output_tokens, back_translate_final_stats.estimated_cost)
+        else:
+            logger.warning("[TRANSLATION_DEBUG] (Stream) Did not receive FinalStats from back-translation.")
 
 # API endpoint for processing Chinese input through English-only model
 @translation_bp.route('/api/process-with-english-model', methods=['POST'])
@@ -212,199 +334,58 @@ def api_process_with_english_model():
 
     contains_chinese = any('\u4e00' <= char <= '\u9fff' for char in user_input)
     logger.info(f"[TRANSLATION_DEBUG] Contains Chinese: {contains_chinese}")
-    cost_tracker = CostTracker()
-
-    def generate(current_user_input):
-        logger.info("[TRANSLATION_DEBUG] Starting generate function")
-        try:
-            nonlocal cost_tracker
-            translated_input = current_user_input
-
-            if contains_chinese:
-                logger.info("[TRANSLATION_DEBUG] Translating Chinese input to English")
-                translate_messages = [
-                    {"role": "system", "content": "You are an expert translator specializing in seamless English-Chinese and Chinese-English translation."},
-                    {"role": "user", "content": current_user_input}
-                ]
-                
-                logger.info("[TRANSLATION_DEBUG] Calling translation API")
-                translate_response = client.chat.completions.create(
-                    model=TRANSLATION_MODEL, messages=translate_messages, max_tokens=1500, temperature=0.3
-                )
-                
-                input_tokens1 = sum(get_token_count(msg.get('content', '')) for msg in translate_messages)
-                output_tokens1 = get_token_count(translate_response.choices[0].message.content)
-                cost1 = estimate_cost(TRANSLATION_MODEL, input_tokens1, output_tokens1)
-                cost_tracker.update(input_tokens1, output_tokens1, cost1)
-                
-                translated_input = translate_response.choices[0].message.content
-                logger.info(f"[TRANSLATION_DEBUG] Translated to: '{translated_input[:30]}...'")
-                
-                if stream_mode:
-                    logger.info("[TRANSLATION_DEBUG] Yielding translation info in stream mode")
-                    yield f"[Translated query to English]: {translated_input}\n\n"
-
-            logger.info("[TRANSLATION_DEBUG] Preparing English messages")
-            english_messages = [{"role": "system", "content": "You are a helpful assistant that only responds in English."}]
-            for msg in conversation_history:
-                english_messages.append(msg)
-            english_messages.append({"role": "user", "content": translated_input})
-
-            logger.info(f"[TRANSLATION_DEBUG] Calling English model API, stream={stream_mode}")
-            try:
-                response = client.chat.completions.create(
-                    model=ENGLISH_MODEL, 
-                    messages=english_messages, 
-                    max_tokens=2000, 
-                    temperature=0.7, 
-                    stream=stream_mode, 
-                    timeout=30
-                )
-                logger.info("[TRANSLATION_DEBUG] English model API call successful")
-            except Exception as e:
-                logger.error(f"[TRANSLATION_DEBUG] Error calling English model API: {str(e)}")
-                raise
-
-            english_output = ""
-            if stream_mode:
-                logger.info("[TRANSLATION_DEBUG] Processing English model streaming response")
-                output_tokens_en = 0
-                chunk_count = 0
-                for chunk in response:
-                    chunk_count += 1
-                    if chunk_count % 10 == 0:
-                        logger.info(f"[TRANSLATION_DEBUG] Processed {chunk_count} chunks so far")
-                    
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        english_output += content
-                        output_tokens_en += get_token_count(content)
-                        logger.debug(f"[TRANSLATION_DEBUG] Yielding content: '{content[:20]}...'")
-                        yield content
-                
-                logger.info(f"[TRANSLATION_DEBUG] Finished streaming {chunk_count} chunks from English model")
-                input_tokens_en = sum(get_token_count(m.get('content', '')) for m in english_messages)
-                cost_en = estimate_cost(ENGLISH_MODEL, input_tokens_en, output_tokens_en)
-                cost_tracker.update(input_tokens_en, output_tokens_en, cost_en)
-            else:
-                logger.info("[TRANSLATION_DEBUG] Processing English model non-streaming response")
-                english_output = response.choices[0].message.content
-                input_tokens_en = sum(get_token_count(m.get('content', '')) for m in english_messages)
-                output_tokens_en = get_token_count(english_output)
-                cost_en = estimate_cost(ENGLISH_MODEL, input_tokens_en, output_tokens_en)
-                cost_tracker.update(input_tokens_en, output_tokens_en, cost_en)
-
-            if contains_chinese:
-                logger.info("[TRANSLATION_DEBUG] Back-translating to Chinese")
-                back_translate_messages = [
-                    {"role": "system", "content": "Translate to Chinese."},
-                    {"role": "user", "content": english_output}
-                ]
-                
-                try:
-                    logger.info("[TRANSLATION_DEBUG] Calling back-translation API")
-                    back_translate_response = client.chat.completions.create(
-                        model=TRANSLATION_MODEL, 
-                        messages=back_translate_messages, 
-                        max_tokens=2000, 
-                        temperature=0.3, 
-                        stream=True
-                    )
-                    
-                    logger.info("[TRANSLATION_DEBUG] Processing back-translation response")
-                    chunk_count = 0
-                    for chunk in back_translate_response:
-                        chunk_count += 1
-                        if chunk_count % 10 == 0:
-                            logger.info(f"[TRANSLATION_DEBUG] Processed {chunk_count} back-translation chunks")
-                        
-                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            logger.debug(f"[TRANSLATION_DEBUG] Yielding back-translated content: '{content[:20]}...'")
-                            yield content
-                    
-                    logger.info(f"[TRANSLATION_DEBUG] Finished back-translation streaming ({chunk_count} chunks)")
-                except Exception as e:
-                    logger.error(f"[TRANSLATION_DEBUG] Error in back-translation: {str(e)}")
-                    yield f"\n\n[Translation error: {str(e)}]\n\n"
-            else:
-                logger.info("[TRANSLATION_DEBUG] No back-translation needed (original was English)")
-                logger.debug(f"[TRANSLATION_DEBUG] Yielding English output directly: '{english_output[:30]}...'")
-                yield english_output
-                
-            logger.info("[TRANSLATION_DEBUG] Generate function completed successfully")
-
-        except Exception as e:
-            logger.error(f"[TRANSLATION_DEBUG] Error in generate function: {str(e)}")
-            yield f"Error: {str(e)}"
 
     if stream_mode:
         logger.info("[TRANSLATION_DEBUG] Setting up streaming response")
-        def stream_with_diagnostics(current_user_input):
-            logger.info("[TRANSLATION_DEBUG] Starting stream_with_diagnostics function")
-            output_chunks = []
-            chunk_count = 0
-            
+        
+        def stream_wrapper():
+            """Wraps the main generator to collect output and append final diagnostics."""
+            cost_tracker = CostTracker()
+            full_response_text = ""
             try:
-                logger.info("[TRANSLATION_DEBUG] Collecting chunks from generate function")
-                for chunk in generate(current_user_input):
-                    chunk_count += 1
-                    if chunk_count % 10 == 0:
-                        logger.info(f"[TRANSLATION_DEBUG] Collected {chunk_count} chunks so far")
-                    
-                    output_chunks.append(chunk)
-                    logger.debug(f"[TRANSLATION_DEBUG] Yielding chunk: '{chunk[:20]}...'")
+                # Yield all content from the main processing generator
+                for chunk in _stream_processing_generator(user_input, conversation_history, contains_chinese, cost_tracker):
+                    full_response_text += chunk
                     yield chunk
                 
-                logger.info(f"[TRANSLATION_DEBUG] Finished collecting {chunk_count} chunks")
-                main_reply = "".join(output_chunks)
-                logger.info(f"[TRANSLATION_DEBUG] Total response length: {len(main_reply)} chars")
-                
-                # Generate diagnostics
-                logger.info("[TRANSLATION_DEBUG] Generating diagnostics")
+                # After content is fully streamed, generate and yield the diagnostics footer
                 diagnostics = cost_tracker.get_diagnostic_info(
-                    model_name=ENGLISH_MODEL, 
-                    input_text=current_user_input, 
-                    output_text=main_reply, 
+                    model_name=ENGLISH_MODEL,
+                    output_text=full_response_text,
                     is_debug=True
                 )
-                
-                diag_content = f"\n\n---\n{diagnostics}"
-                logger.info(f"[TRANSLATION_DEBUG] Yielding diagnostics: '{diag_content[:50]}...'")
-                yield diag_content
-                logger.info("[TRANSLATION_DEBUG] stream_with_diagnostics function completed successfully")
+                if diagnostics:
+                    diag_content = f"\n\n---\n{diagnostics}"
+                    yield diag_content
             except Exception as e:
-                logger.error(f"[TRANSLATION_DEBUG] Error in stream_with_diagnostics: {str(e)}")
-                yield f"\n\nError in streaming: {str(e)}"
+                logger.error(f"Error in streaming wrapper: {str(e)}", exc_info=True)
+                yield f"\n\n[Error during streaming: {str(e)}]"
 
-        logger.info("[TRANSLATION_DEBUG] Creating streaming response")
         try:
-            return Response(stream_with_context(stream_with_diagnostics(user_input)), mimetype='text/plain')
+            # The frontend expects text/plain for this specific endpoint
+            return Response(stream_with_context(stream_wrapper()), mimetype='text/plain')
         except Exception as e:
             logger.error(f"[TRANSLATION_DEBUG] Error creating streaming response: {str(e)}")
             return jsonify({'error': f'Streaming error: {str(e)}'}), 500
     else:
-        logger.info("[TRANSLATION_DEBUG] Setting up non-streaming response")
+        # Handle non-streaming requests by calling the dedicated helper function
+        logger.info("[TRANSLATION_DEBUG] Starting non-streaming processing")
         try:
-            output_chunks = []
-            for chunk in generate(user_input):
-                output_chunks.append(chunk)
-            
-            main_reply = "".join(output_chunks)
-            logger.info(f"[TRANSLATION_DEBUG] Non-streaming response length: {len(main_reply)} chars")
+            final_reply, cost_tracker = _handle_non_stream_processing(
+                user_input, conversation_history, contains_chinese
+            )
             
             diagnostics = cost_tracker.get_diagnostic_info(
                 model_name=ENGLISH_MODEL, 
-                input_text=user_input, 
-                output_text=main_reply, 
+                output_text=final_reply, 
                 is_debug=True
             )
             
-            response_text = main_reply + f"\n\n---\n{diagnostics}"
+            response_text = final_reply + f"\n\n---\n{diagnostics}"
             logger.info("[TRANSLATION_DEBUG] Returning non-streaming JSON response")
             return Response(json.dumps({'response': response_text}, ensure_ascii=False), mimetype='application/json')
         except Exception as e:
-            logger.error(f"[TRANSLATION_DEBUG] Error in non-streaming response: {str(e)}")
+            logger.error(f"[TRANSLATION_DEBUG] Error in non-streaming processing: {str(e)}", exc_info=True)
             return jsonify({'error': f'Error: {str(e)}'}), 500
 
 # Function to register the blueprint with a Flask app

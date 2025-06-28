@@ -8,6 +8,7 @@ import hashlib
 import json
 import time
 from typing import Dict, Any, Optional
+from types import SimpleNamespace
 import sqlite3
 import threading
 import logging_config
@@ -69,7 +70,7 @@ class SQLiteCacheManager:
                 ''')
                 conn.commit()
 
-    def get(self, model: str, messages: list) -> Optional[Dict[str, Any]]:
+    def get(self, model: str, messages: list) -> Optional[Any]:
         """Retrieve a cached response if it exists and is not expired."""
         cache_key = get_cache_key(model, messages)
         with self._lock:
@@ -84,9 +85,22 @@ class SQLiteCacheManager:
                 if row:
                     response_json, timestamp = row
                     if time.time() - timestamp < self.expiry_seconds:
-                        logger.debug(f"Cache HIT for key: {cache_key[:10]}...")
+                        logger.info(f"Cache HIT for key: {cache_key[:10]}...")
                         try:
-                            return json.loads(response_json)
+                            response_dict = json.loads(response_json)
+                            
+                            # Recursively convert dict to a SimpleNamespace object to allow dot notation access
+                            def dict_to_obj(d):
+                                if isinstance(d, dict):
+                                    return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
+                                elif isinstance(d, list):
+                                    return [dict_to_obj(i) for i in d]
+                                else:
+                                    return d
+                            
+                            obj_response = dict_to_obj(response_dict)
+                            logger.debug(f"Returning object of type {type(obj_response)} from cache.")
+                            return obj_response
                         except json.JSONDecodeError:
                             logger.error(f"Failed to decode cached JSON for key {cache_key}")
                             # Corrupt data, delete it
@@ -94,16 +108,23 @@ class SQLiteCacheManager:
                             return None
                     else:
                         # Expired, delete it
-                        logger.debug(f"Cache EXPIRED for key: {cache_key[:10]}...")
+                        logger.info(f"Cache EXPIRED for key: {cache_key[:10]}...")
                         self.delete(cache_key)
         
-        logger.debug(f"Cache MISS for key: {cache_key[:10]}...")
+        logger.info(f"Cache MISS for key: {cache_key[:10]}...")
         return None
 
     def add(self, model: str, messages: list, response: Any):
         """Add a response to the cache."""
         cache_key = get_cache_key(model, messages)
-        response_json = json.dumps(response, ensure_ascii=False)
+        
+        # Convert Pydantic model to dict before serializing to JSON
+        response_to_serialize = response
+        if hasattr(response, 'model_dump'):
+            logger.debug(f"Serializing Pydantic model of type {type(response)} to dict for caching.")
+            response_to_serialize = response.model_dump()
+        
+        response_json = json.dumps(response_to_serialize, ensure_ascii=False)
         current_time = int(time.time())
 
         with self._lock:
@@ -117,7 +138,7 @@ class SQLiteCacheManager:
                     (cache_key, response_json, current_time)
                 )
                 conn.commit()
-                logger.debug(f"Cache ADD for key: {cache_key[:10]}...")
+                logger.info(f"Cache ADD for key: {cache_key[:10]}...")
         
         # Clean up after adding to ensure cache size is maintained
         self.clean()
@@ -168,7 +189,7 @@ _cache_manager_instance = SQLiteCacheManager(
     expiry_seconds=LLM_CACHE_EXPIRY_SECONDS
 )
 
-def get_from_cache(model: str, messages: list) -> Optional[Dict[str, Any]]:
+def get_from_cache(model: str, messages: list) -> Optional[Any]:
     """
     Retrieve a cached response if it exists and is not expired.
     
