@@ -105,7 +105,6 @@ npm run build
 
 ## Future Improvements
 
-- Persistent storage options (Redis) for session and cache data
 - Additional unit and integration test coverage
 - More cost-effective tokenizer implementation
 

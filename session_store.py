@@ -1,8 +1,8 @@
 """
-Session store module for MyGrok3, supporting both in-memory and Redis backends.
+Session store module for MyGrok3, using an SQLite backend.
 
-This module provides a flexible session management solution that can be configured
-via environment variables. It includes automatic cleanup of old, inactive sessions.
+This module provides a persistent session management solution using SQLite.
+It includes automatic cleanup of old, inactive sessions.
 """
 from __future__ import annotations
 from typing import Dict, List, Any, Optional
@@ -17,11 +17,6 @@ from collections import defaultdict
 import logging_config
 from config import CLEANUP_MAX_AGE_HOURS, CLEANUP_MIN_MESSAGES
 logger = logging_config.configure_logger(__name__)
-
-try:
-    import redis
-except ImportError:
-    redis = None
 
 # --- In-Memory Session Store ---
 

@@ -14,10 +14,6 @@ TITLE_MODEL = "google/gemini-flash-1.5-8b"
 
 # --- Session Management Configuration ---
 
-# The number of seconds after which an inactive session will be expired in Redis.
-# Default is 24 hours (86400 seconds).
-SESSION_EXPIRATION_SECONDS = 86400
-
 # --- Conversation Cleanup Configuration ---
 
 # The maximum age (in hours) of a conversation before it's considered for cleanup.
