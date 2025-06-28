@@ -93,6 +93,8 @@ npm run build
 - `FLASK_APP` - Set to `app.py` (default for Flask)
 - `FLASK_DEBUG` - Set to `true` for debug mode (optional)
 - `SECRET_KEY` - Flask session encryption key (generated if not provided)
+- const CLEANUP_MAX_AGE_HOURS = 4; // Conversations older than this will be cleaned
+- const CLEANUP_MIN_AI_REPLIES = 5; // if they have fewer than this many AI replies
 
 ## API Endpoints
 
@@ -119,6 +121,8 @@ export USE_STABLE_MODELS=true
 flask run -p 5005 -h 0.0.0.0
 
 # Or run with experimental models
+screen
+source ~/tmp/venv/bin/activate
 export USE_STABLE_MODELS=false
 flask run -p 5005 -h 0.0.0.0
 ### Features

@@ -1,4 +1,5 @@
 # --- Model Name Constants ---
+GEMINI_2_5_PRO = "google/gemini-2.5-pro"
 GEMINI_FLASH_1_5_8B = "google/gemini-flash-1.5-8b"
 GEMINI_2_5_FLASH_LITE = "google/gemini-2.5-flash-lite-preview-06-17"
 GEMMA_3_12B_IT = "google/gemma-3-12b-it"
@@ -29,6 +30,7 @@ MODELS_EXPERIMENTAL = [
     GROK_3_MINI,
     DEEPSEEK_R1_DISTILL_LLAMA_70B_FREE,
     DEEPSEEK_R1_0528_FREE,
+    GEMINI_2_5_PRO,
 ]
 
 MODELS_STABLE = [
@@ -37,6 +39,7 @@ MODELS_STABLE = [
     GROK_3_MINI,
     GPT_4O_MINI,
     DEEPSEEK_R1_DISTILL_LLAMA_70B_FREE,
+    GEMINI_2_5_PRO,
 ]
 
 # --- Specific Model Roles ---

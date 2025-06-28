@@ -17,11 +17,14 @@ const initialConversations = [
   { id: 1, name: "会话1", messages: [] }
 ];
 
+const CLEANUP_MAX_AGE_HOURS = 4; // Conversations older than this will be cleaned
+const CLEANUP_MIN_AI_REPLIES = 5; // if they have fewer than this many AI replies
+
 function getInitialState() {
   try {
-    // Try to load conversations from localStorage
-    const savedConversations = localStorage.getItem("grok3_conversations");
-    const savedCurrentId = localStorage.getItem("grok3_current_id");
+    // Try to load conversations from sessionStorage
+    const savedConversations = sessionStorage.getItem("grok3_conversations");
+    const savedCurrentId = sessionStorage.getItem("grok3_current_id");
     
     let conversations = initialConversations;
     let currentId = initialConversations[0].id;
@@ -49,7 +52,7 @@ function getInitialState() {
     
     return { conversations, currentId };
   } catch (error) {
-    console.error('Error loading state from localStorage:', error);
+    console.error('Error loading state from sessionStorage:', error);
     return {
       conversations: initialConversations.map(conv => ({
         ...conv,
@@ -68,7 +71,7 @@ export default function App() {
   const [models, setModels] = useState((window.appConfig && window.appConfig.models) || defaultModels);
   const [state, setState] = useState(() => {
     const initialState = getInitialState();
-    console.log('[INIT] state from localStorage:', initialState);
+    console.log('[INIT] state from sessionStorage:', initialState);
     return initialState;
   });
   
@@ -77,6 +80,39 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState(
     (currentConv && currentConv.selectedModel) || models[0]
   );
+
+  // Auto-cleanup logic on component mount
+  useEffect(() => {
+    const now = new Date();
+    const cleanedConversations = conversations.filter(conv => {
+      // Rule 1: Never clean the currently active conversation.
+      if (conv.id === currentId) {
+        return true;
+      }
+
+      const aiReplies = conv.messages.filter(m => m.role === 'assistant' && m.content).length;
+      const createdAt = conv.createdAt ? new Date(conv.createdAt) : new Date(0); // Fallback for old convs
+      const ageHours = (now - createdAt) / (1000 * 60 * 60);
+
+      // Rule 2: Keep if it's new OR has enough replies.
+      const shouldKeep = ageHours < CLEANUP_MAX_AGE_HOURS || aiReplies >= CLEANUP_MIN_AI_REPLIES;
+      
+      if (!shouldKeep) {
+        console.log(`Auto-cleaning conversation \"${conv.name}\" (ID: ${conv.id}) - Age: ${ageHours.toFixed(2)}h, AI Replies: ${aiReplies}`);
+      }
+      return shouldKeep;
+    });
+
+    // Rule 3: If cleaning would remove all conversations, don't do it.
+    if (cleanedConversations.length === 0 && conversations.length > 0) {
+      console.log("Auto-cleanup aborted: would remove all conversations.");
+      return;
+    }
+    
+    if (cleanedConversations.length < conversations.length) {
+      setConversations(cleanedConversations);
+    }
+  }, []); // Run only once on mount
 
   // Custom setter to update both selectedModel and conversation state
   const updateSelectedModel = (newModel) => {
@@ -88,7 +124,7 @@ export default function App() {
             ? { ...conv, selectedModel: newModel }
             : conv
         );
-        localStorage.setItem("grok3_conversations", JSON.stringify(updatedConversations));
+        sessionStorage.setItem("grok3_conversations", JSON.stringify(updatedConversations));
         return {
           ...prev,
           conversations: updatedConversations
@@ -121,8 +157,8 @@ export default function App() {
     setState(() => {
       const conversations = typeof newConvs === 'function' ? newConvs(getInitialState().conversations) : newConvs;
       const currentId = id !== undefined ? id : (conversations[0] ? conversations[0].id : 1);
-      localStorage.setItem("grok3_conversations", JSON.stringify(conversations));
-      localStorage.setItem("grok3_current_id", String(currentId));
+      sessionStorage.setItem("grok3_conversations", JSON.stringify(conversations));
+      sessionStorage.setItem("grok3_current_id", String(currentId));
       console.log('[UPDATE] conversations:', conversations);
       console.log('[UPDATE] currentId:', currentId);
       return { conversations, currentId };
@@ -130,7 +166,7 @@ export default function App() {
   }
   // 兼容原有用法
   const setConversations = (newConvs) => setState(state => {
-    localStorage.setItem("grok3_conversations", JSON.stringify(typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs));
+    sessionStorage.setItem("grok3_conversations", JSON.stringify(typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs));
     return {
       conversations: typeof newConvs === 'function' ? newConvs(state.conversations) : newConvs,
       currentId: state.currentId
@@ -138,7 +174,7 @@ export default function App() {
   });
   const setCurrentId = (id) => {
     setState(state => {
-      localStorage.setItem("grok3_current_id", String(id));
+      sessionStorage.setItem("grok3_current_id", String(id));
       return {
         conversations: state.conversations,
         currentId: id
@@ -158,7 +194,7 @@ export default function App() {
     if (!conversations.find(c => c.id === currentId) && conversations.length > 0) {
       const fallbackId = conversations[0].id;
       setState(state => {
-        localStorage.setItem("grok3_current_id", String(fallbackId));
+        sessionStorage.setItem("grok3_current_id", String(fallbackId));
         return { ...state, currentId: fallbackId };
       });
     }
@@ -168,8 +204,8 @@ export default function App() {
     if (process.env.DEBUG_RENDER === 'true') {
       console.log('[STATE CHANGE] conversations:', conversations);
       console.log('[STATE CHANGE] currentId:', currentId);
-      console.log('[STATE CHANGE] localStorage.grok3_conversations:', localStorage.getItem('grok3_conversations'));
-      console.log('[STATE CHANGE] localStorage.grok3_current_id:', localStorage.getItem('grok3_current_id'));
+      console.log('[STATE CHANGE] sessionStorage.grok3_conversations:', sessionStorage.getItem('grok3_conversations'));
+      console.log('[STATE CHANGE] sessionStorage.grok3_current_id:', sessionStorage.getItem('grok3_current_id'));
     }
   }, [conversations, currentId]);
 
@@ -183,13 +219,14 @@ export default function App() {
       id: newId,
       name: `新会话${conversations.length + 1}`,
       messages: [],
+      createdAt: new Date().toISOString(), // Add creation timestamp
       selectedModel: defaultModel
     };
 
     setState(prev => {
       const newConversations = [...prev.conversations, newConv];
-      localStorage.setItem("grok3_conversations", JSON.stringify(newConversations));
-      localStorage.setItem("grok3_current_id", String(newId));
+      sessionStorage.setItem("grok3_conversations", JSON.stringify(newConversations));
+      sessionStorage.setItem("grok3_current_id", String(newId));
       return {
         conversations: newConversations,
         currentId: newId
@@ -198,15 +235,32 @@ export default function App() {
   };
 
   // 删除会话
-  const deleteConversation = () => {
-    const newList = conversations.filter(c => c.id !== currentId);
-    setConversations(newList.length ? newList : [{ id: 1, name: "会话1", messages: [] }]);
-    setCurrentId(newList.length ? newList[0].id : 1);
+  const deleteConversation = async () => {
+    const sessionToDelete = currentId;
+    
+    // Optimistically update the UI
+    const newConversations = conversations.filter(c => c.id !== sessionToDelete);
+    setConversationsAndCurrentId(newConversations);
     setShowDelete(false);
+
+    try {
+      const response = await fetch(`/api/session/${sessionToDelete}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        throw new Error('Failed to delete session on server');
+      }
+      const result = await response.json();
+      console.log(result.message);
+    } catch (error) {
+      console.error("Error deleting session:", error);
+      // Here you might want to add logic to revert the UI change
+      // or notify the user that the deletion failed.
+      alert("在服务器上删除会话失败，请刷新页面重试。");
+    }
   };
 
   // 发送消息
-  // 用 grok-3-mini 自动归纳标题
   async function summarizeTitleAI(messages) {
     try {
       const response = await fetch("/api/title_summary", {

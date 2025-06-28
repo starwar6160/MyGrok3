@@ -27,16 +27,12 @@ except ImportError:
 
 class InMemorySessionStore:
     DB_FILE = "sessions.db"
-    """Thread-safe in-memory session data store."""
+    """Session data store that interacts directly with an SQLite database."""
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._global_stats = self._default_global_stats()
         self._init_db()
-        self._load_from_db()
-        self._persistence_thread = threading.Thread(target=self._persistence_loop, daemon=True)
-        self._persistence_thread.start()
+        # The cleanup thread remains to clean the database periodically.
         self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self._cleanup_thread.start()
 
@@ -51,9 +47,16 @@ class InMemorySessionStore:
 
     def get_session(self, session_id: str) -> Dict[str, Any]:
         with self._lock:
-            if session_id not in self._sessions:
-                self._sessions[session_id] = self._create_new_session()
-            return self._sessions[session_id]
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_data FROM sessions WHERE session_id = ?", (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    return json.loads(row[0])
+                else:
+                    new_session = self._create_new_session()
+                    self.update_session(session_id, **new_session) # Persist it immediately
+                    return new_session
 
     def _create_new_session(self) -> Dict[str, Any]:
         return {
@@ -65,40 +68,55 @@ class InMemorySessionStore:
 
     def update_session(self, session_id: str, **kwargs) -> None:
         with self._lock:
-            session = self.get_session(session_id)
-            session.update(kwargs)
-            session["last_active"] = datetime.now().isoformat()
+            # Retrieve the current session data to update it
+            # This is a simplified approach. For high-concurrency, a more robust read-modify-write is needed.
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT session_data FROM sessions WHERE session_id = ?", (session_id,))
+                row = cursor.fetchone()
+                session = json.loads(row[0]) if row else self._create_new_session()
+
+                session.update(kwargs)
+                session["last_active"] = datetime.now().isoformat()
+
+                cursor.execute('''
+                    INSERT INTO sessions (session_id, session_data, last_updated)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        session_data = excluded.session_data,
+                        last_updated = excluded.last_updated;
+                ''', (session_id, json.dumps(session), datetime.now()))
+                conn.commit()
 
     def add_message(self, session_id: str, message: Dict[str, Any]) -> None:
         with self._lock:
             session = self.get_session(session_id)
             session["messages"].append(message)
-            session["last_active"] = datetime.now().isoformat()
+            self.update_session(session_id, messages=session["messages"])
 
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        with self._lock:
-            return self.get_session(session_id).get("messages", [])
+        return self.get_session(session_id).get("messages", [])
 
     def update_stats(self, session_id: str, tokens_in: int = 0, tokens_out: int = 0, cost: float = 0.0, model: Optional[str] = None) -> None:
         with self._lock:
             session = self.get_session(session_id)
-            session["token_count"] += tokens_in + tokens_out
-            session["total_cost"] += cost
-            session["requests_count"] += 1
+            session["token_count"] = session.get("token_count", 0) + tokens_in + tokens_out
+            session["total_cost"] = session.get("total_cost", 0.0) + cost
+            session["requests_count"] = session.get("requests_count", 0) + 1
             if model:
+                if "models_used" not in session:
+                    session["models_used"] = {}
                 session["models_used"][model] = session["models_used"].get(model, 0) + 1
-            self.update_session(session_id)
+            self.update_session(session_id, **session)
 
-            self._global_stats["total_tokens"] += tokens_in + tokens_out
-            self._global_stats["total_cost"] += cost
-            self._global_stats["requests_count"] += 1
-            if model:
-                self._global_stats["models_usage"][model] += 1
-            self._global_stats["last_updated"] = datetime.now().isoformat()
+            # Global stats would need a separate persistence mechanism if required.
+            # For now, we remove the direct update to simplify.
+            pass
 
     def get_global_stats(self) -> Dict[str, Any]:
-        with self._lock:
-            return dict(self._global_stats)
+        # This should be re-implemented to pull from a persistent store if needed.
+        logger.warning("get_global_stats is returning a default, non-persistent value.")
+        return self._default_global_stats()
 
     def _init_db(self):
         with sqlite3.connect(self.DB_FILE) as conn:
@@ -112,173 +130,63 @@ class InMemorySessionStore:
             ''')
             conn.commit()
 
-    def _load_from_db(self):
-        try:
+
+
+
+
+
+    def get_all_sessions(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
             with sqlite3.connect(self.DB_FILE) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT session_id, session_data FROM sessions")
                 rows = cursor.fetchall()
-                with self._lock:
-                    for row in rows:
-                        session_id, session_data_json = row
-                        try:
-                            self._sessions[session_id] = json.loads(session_data_json)
-                        except json.JSONDecodeError:
-                            logger.error(f"Failed to decode session data for {session_id}")
-            logger.info(f"Loaded {len(self._sessions)} sessions from SQLite.")
-        except sqlite3.Error as e:
-            logger.error(f"Error loading sessions from SQLite: {e}")
+                sessions = {}
+                for row in rows:
+                    try:
+                        sessions[row[0]] = json.loads(row[1])
+                    except json.JSONDecodeError:
+                        logger.error(f"Failed to decode session data for {row[0]} from DB")
+                return sessions
 
-    def _persistence_loop(self):
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            with sqlite3.connect(self.DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+
+    def _cleanup_loop(self) -> None:
         while True:
-            time.sleep(300)  # Persist every 5 minutes
+            time.sleep(3600)  # Clean up every hour
             try:
                 with self._lock:
-                    sessions_to_save = list(self._sessions.items())
-                
-                if not sessions_to_save:
-                    continue
+                    with sqlite3.connect(self.DB_FILE) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT session_id, session_data FROM sessions")
+                        rows = cursor.fetchall()
+                        now = datetime.now()
+                        to_delete = []
+                        for session_id, session_data_json in rows:
+                            try:
+                                session = json.loads(session_data_json)
+                                created_at = datetime.fromisoformat(session.get("created_at"))
+                                ai_replies = len([m for m in session.get("messages", []) if m.get("role") == "assistant"])
+                                
+                                if (now - created_at).total_seconds() > CLEANUP_MAX_AGE_HOURS * 3600 and ai_replies < CLEANUP_MIN_MESSAGES:
+                                    to_delete.append(session_id)
+                            except (json.JSONDecodeError, TypeError):
+                                logger.error(f"Could not parse session {session_id} for cleanup.")
 
-                with sqlite3.connect(self.DB_FILE) as conn:
-                    cursor = conn.cursor()
-                    data_to_upsert = [
-                        (sid, json.dumps(sdata), datetime.now()) 
-                        for sid, sdata in sessions_to_save
-                    ]
-                    cursor.executemany('''
-                        INSERT INTO sessions (session_id, session_data, last_updated)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(session_id) DO UPDATE SET
-                            session_data = excluded.session_data,
-                            last_updated = excluded.last_updated;
-                    ''', data_to_upsert)
-                    conn.commit()
-                logger.info(f"Persisted {len(sessions_to_save)} sessions to SQLite.")
+                        if to_delete:
+                            cursor.executemany("DELETE FROM sessions WHERE session_id = ?", [(sid,) for sid in to_delete])
+                            conn.commit()
+                            logger.info(f"Cleaned up {len(to_delete)} short, inactive sessions from SQLite.")
             except sqlite3.Error as e:
-                logger.error(f"Error persisting sessions to SQLite: {e}")
+                logger.error(f"Error in SQLite cleanup loop: {e}")
             except Exception as e:
-                logger.error(f"An unexpected error occurred in the persistence loop: {e}")
-
-
-    def get_all_sessions(self) -> Dict[str, Dict[str, Any]]:
-        with self._lock:
-            return dict(self._sessions)
-
-    def delete_session(self, session_id: str) -> bool:
-        with self._lock:
-            if session_id in self._sessions:
-                del self._sessions[session_id]
-                return True
-            return False
-
-    def _cleanup_loop(self) -> None:
-        while True:
-            time.sleep(3600)  # Check every hour
-            try:
-                with self._lock:
-                    now = datetime.now()
-                    to_delete = []
-                    for session_id, session in self._sessions.items():
-                        created_at = datetime.fromisoformat(session.get("created_at"))
-                        msg_count = len(session.get("messages", []))
-                        if (now - created_at).total_seconds() > CLEANUP_MAX_AGE_HOURS * 3600 and msg_count < CLEANUP_MIN_MESSAGES:
-                            to_delete.append(session_id)
-                    
-                    for session_id in to_delete:
-                        del self._sessions[session_id]
-                        logger.info(f"Cleaned up short, inactive in-memory session: {session_id}")
-            except Exception as e:
-                logger.error(f"Error in InMemorySessionStore cleanup thread: {e}")
-
-# --- Redis Session Store ---
-
-class RedisSessionStore(InMemorySessionStore):
-    """A session store using Redis, with an in-memory fallback."""
-
-    def __init__(self, host='localhost', port=6379, db=0):
-        super().__init__() # Initializes cleanup thread and other basics
-        self.redis = None
-        if redis is None:
-            logger.error("Redis library not installed. `pip install redis`. Falling back to in-memory store.")
-            return
-        try:
-            self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
-            self.redis.ping()
-            logger.info(f"Successfully connected to Redis at {host}:{port}")
-        except redis.exceptions.ConnectionError as e:
-            logger.error(f"Could not connect to Redis: {e}. Falling back to in-memory store.")
-            self.redis = None
-
-    def get_session(self, session_id: str) -> Dict[str, Any]:
-        if not self.redis: return super().get_session(session_id)
-        session_key = f"session:{session_id}"
-        session_data = self.redis.get(session_key)
-        if session_data:
-            return json.loads(session_data)
-        else:
-            new_session = self._create_new_session()
-            self.redis.set(session_key, json.dumps(new_session))
-            return new_session
-
-    def update_session(self, session_id: str, **kwargs) -> None:
-        if not self.redis: return super().update_session(session_id, **kwargs)
-        session_key = f"session:{session_id}"
-        with self.redis.pipeline() as pipe:
-            try:
-                pipe.watch(session_key)
-                session_data = pipe.get(session_key)
-                session = json.loads(session_data) if session_data else self._create_new_session()
-                session.update(kwargs)
-                session["last_active"] = datetime.now().isoformat()
-                pipe.multi()
-                pipe.set(session_key, json.dumps(session))
-                pipe.execute()
-            except redis.exceptions.WatchError:
-                logger.warning(f"WatchError on session {session_id}, retrying update.")
-                time.sleep(0.1)
-                self.update_session(session_id, **kwargs)
-
-    def add_message(self, session_id: str, message: Dict[str, Any]) -> None:
-        if not self.redis: return super().add_message(session_id, message)
-        session = self.get_session(session_id)
-        session["messages"].append(message)
-        self.update_session(session_id, messages=session["messages"])
-
-    def delete_session(self, session_id: str) -> bool:
-        if not self.redis: return super().delete_session(session_id)
-        return self.redis.delete(f"session:{session_id}") > 0
-
-    def get_all_sessions(self) -> Dict[str, Dict[str, Any]]:
-        if not self.redis: return super().get_all_sessions()
-        session_keys = self.redis.keys('session:*')
-        if not session_keys: return {}
-        sessions = self.redis.mget(session_keys)
-        return {key.split(':')[1]: json.loads(s) for key, s in zip(session_keys, sessions) if s}
-
-    def _cleanup_loop(self) -> None:
-        # Override cleanup to work with Redis
-        while True:
-            time.sleep(3600) # Check every hour
-            if not self.redis:
-                super()._cleanup_loop() # Fallback to in-memory cleanup
-                continue
-            try:
-                now = datetime.now()
-                to_delete = []
-                for key in self.redis.scan_iter('session:*'):
-                    session_data = self.redis.get(key)
-                    if not session_data: continue
-                    session = json.loads(session_data)
-                    created_at = datetime.fromisoformat(session.get("created_at"))
-                    msg_count = len(session.get("messages", []))
-                    if (now - created_at).total_seconds() > CLEANUP_MAX_AGE_HOURS * 3600 and msg_count < CLEANUP_MIN_MESSAGES:
-                        to_delete.append(key)
-                
-                if to_delete:
-                    self.redis.delete(*to_delete)
-                    logger.info(f"Cleaned up {len(to_delete)} short, inactive Redis sessions.")
-            except Exception as e:
-                logger.error(f"Error in RedisSessionStore cleanup thread: {e}")
+                logger.error(f"An unexpected error occurred in the cleanup loop: {e}")
 
 # --- Singleton Factory ---
 
@@ -286,19 +194,13 @@ _instance = None
 _instance_lock = threading.Lock()
 
 def get_session_store():
-    """Factory function to get the appropriate session store instance."""
+    """Factory function to get the session store instance."""
     global _instance
     if _instance is None:
         with _instance_lock:
             if _instance is None:
-                if os.environ.get('USE_REDIS', 'false').lower() == 'true':
-                    logger.info("USE_REDIS is true, attempting to use RedisSessionStore.")
-                    redis_host = os.environ.get('REDIS_HOST', 'localhost')
-                    redis_port = int(os.environ.get('REDIS_PORT', 6379))
-                    _instance = RedisSessionStore(host=redis_host, port=redis_port)
-                else:
-                    logger.info("Using InMemorySessionStore.")
-                    _instance = InMemorySessionStore()
+                logger.info("Initializing InMemorySessionStore with SQLite backend.")
+                _instance = InMemorySessionStore()
     return _instance
 
 # Alias for backwards compatibility
