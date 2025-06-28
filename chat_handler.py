@@ -76,10 +76,6 @@ def ask_llm_stream(
                 yield chunk.choices[0].delta.content
             if chunk.usage:
                 usage_data = chunk.usage
-        # Add timestamp at the end of the stream
-        timestamp = datetime.datetime.now().strftime("%m-%d-%H-%M")
-        logger.debug(f"Timestamp yielded: | Timestamp: {timestamp}")
-        yield f" | Timestamp: {timestamp}"
         if usage_data:
             yield usage_data  # Yield usage data after timestamp
                 

@@ -158,6 +158,7 @@ def _handle_non_stream_processing(user_input, conversation_history, contains_chi
     """
     cost_tracker = CostTracker()
     translated_input = user_input
+    final_output_parts = []
 
     # Step 1: Translate to English if necessary
     if contains_chinese:
@@ -186,6 +187,8 @@ def _handle_non_stream_processing(user_input, conversation_history, contains_chi
         cost = estimate_cost(TRANSLATION_MODEL, translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens)
         cost_tracker.update(translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens, cost)
         logger.info(f"[TRANSLATION_DEBUG] (Non-stream) Translated to: '{translated_input[:30]}...'")
+        final_output_parts.append("--- [步骤 1: 将问题翻译为英文] ---\n")
+        final_output_parts.append(f"{translated_input}\n")
 
     # Step 2: Get response from the English-only model
     logger.info("[TRANSLATION_DEBUG] (Non-stream) Calling English model")
@@ -211,8 +214,8 @@ def _handle_non_stream_processing(user_input, conversation_history, contains_chi
     cost = estimate_cost(ENGLISH_MODEL, english_response.usage.prompt_tokens, english_response.usage.completion_tokens)
     cost_tracker.update(english_response.usage.prompt_tokens, english_response.usage.completion_tokens, cost)
 
-    final_output = english_output
-
+    final_output_parts.append("\n--- [步骤 2: 使用英文模型处理] ---\n")
+    final_output_parts.append(f"{english_output}\n")
     # Step 3: Back-translate to Chinese if necessary
     if contains_chinese:
         logger.info("[TRANSLATION_DEBUG] (Non-stream) Back-translating to Chinese")
@@ -233,14 +236,16 @@ def _handle_non_stream_processing(user_input, conversation_history, contains_chi
             err_msg = "API returned no choices or an invalid response object."
         
         if is_error_back:
-            final_output += f"\n\n[Back-translation to Chinese failed: {err_msg}]"
+            final_output_parts.append(f"\n--- [步骤 3: 将回复翻译回中文] ---\n[Back-translation to Chinese failed: {err_msg}]")
             logger.warning(f"Back-translation failed: {err_msg}")
         else:
-            final_output = back_translate_response.choices[0].message.content
+            final_output_parts.append("\n--- [步骤 3: 将回复翻译回中文] ---\n")
+            final_output_parts.append(back_translate_response.choices[0].message.content)
             cost = estimate_cost(TRANSLATION_MODEL, back_translate_response.usage.prompt_tokens, back_translate_response.usage.completion_tokens)
             cost_tracker.update(back_translate_response.usage.prompt_tokens, back_translate_response.usage.completion_tokens, cost)
             
-    return final_output, cost_tracker
+    final_output_str = "".join(final_output_parts)
+    return final_output_str, cost_tracker
 
 def _stream_processing_generator(user_input, conversation_history, contains_chinese, cost_tracker):
     """
@@ -275,10 +280,12 @@ def _stream_processing_generator(user_input, conversation_history, contains_chin
         translated_input = translate_response.choices[0].message.content
         cost = estimate_cost(TRANSLATION_MODEL, translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens)
         cost_tracker.update(translate_response.usage.prompt_tokens, translate_response.usage.completion_tokens, cost)
-        yield f"[Translated query to English]: {translated_input}\n\n"
+        yield "--- [步骤 1: 将问题翻译为英文] ---\n"
+        yield f"{translated_input}\n\n"
 
     # --- Step 2: Get response from the English-only model (streaming) ---
     logger.info("[TRANSLATION_DEBUG] (Stream) Calling English model")
+    yield "--- [步骤 2: 使用英文模型处理] ---\n"
     english_messages = [{"role": "system", "content": "You are a helpful assistant that only responds in English."}]
     english_messages.extend(conversation_history)
     english_messages.append({"role": "user", "content": translated_input})
@@ -299,7 +306,7 @@ def _stream_processing_generator(user_input, conversation_history, contains_chin
     # --- Step 3: Back-translate to Chinese (if necessary, streaming) ---
     if contains_chinese:
         logger.info("[TRANSLATION_DEBUG] (Stream) Back-translating to Chinese")
-        yield "\n\n[Translating response to Chinese...]\n"
+        yield "\n\n--- [步骤 3: 将回复翻译回中文] ---\n"
         back_translate_messages = [
             {"role": "system", "content": "Translate to Chinese."},
             {"role": "user", "content": english_output}
