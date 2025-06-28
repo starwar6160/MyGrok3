@@ -14,9 +14,6 @@ from cost_calculator import estimate_cost
 
 logger = logging.getLogger(__name__)
 
-# Initialize cost tracker for translation API
-translation_cost_tracker = CostTracker()
-
 # Create a Blueprint for translation routes
 translation_bp = Blueprint('translation', __name__)
 
@@ -28,6 +25,7 @@ from models_config import TRANSLATION_MODEL, ENGLISH_MODEL
 @translation_bp.route('/api/translate', methods=['POST'])
 def api_translate():
     try:
+        translation_cost_tracker = CostTracker()
         data = request.json
         text = data.get('text', '')
         source_lang = data.get('source_lang', 'auto')
@@ -80,8 +78,11 @@ def api_translate():
                         )
 
                         # Generate diagnostics footer
+                        # For this API, cumulative cost is just the cost of this multi-step process
                         diagnostics = translation_cost_tracker.get_diagnostic_info(
                             model_name=TRANSLATION_MODEL,
+                            cumulative_tokens=translation_cost_tracker.input_tokens + translation_cost_tracker.output_tokens,
+                            cumulative_cost=translation_cost_tracker.cost,
                             output_text=final_stats_obj.full_answer,
                             is_debug=True
                         )
@@ -129,6 +130,8 @@ def api_translate():
             
             diagnostics = translation_cost_tracker.get_diagnostic_info(
                 model_name=TRANSLATION_MODEL,
+                cumulative_tokens=translation_cost_tracker.input_tokens + translation_cost_tracker.output_tokens,
+                cumulative_cost=translation_cost_tracker.cost,
                 output_text=translated_text,
                 is_debug=True
             )
@@ -358,6 +361,9 @@ def api_process_with_english_model():
                 # After content is fully streamed, generate and yield the diagnostics footer
                 diagnostics = cost_tracker.get_diagnostic_info(
                     model_name=ENGLISH_MODEL,
+                    # For this API, cumulative cost is just the cost of this multi-step process
+                    cumulative_tokens=cost_tracker.input_tokens + cost_tracker.output_tokens,
+                    cumulative_cost=cost_tracker.cost,
                     output_text=full_response_text,
                     is_debug=True
                 )
@@ -384,6 +390,8 @@ def api_process_with_english_model():
             
             diagnostics = cost_tracker.get_diagnostic_info(
                 model_name=ENGLISH_MODEL, 
+                cumulative_tokens=cost_tracker.input_tokens + cost_tracker.output_tokens,
+                cumulative_cost=cost_tracker.cost,
                 output_text=final_reply, 
                 is_debug=True
             )

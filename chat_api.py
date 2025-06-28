@@ -121,16 +121,19 @@ def api_chat():
             )
 
             # Create a cost_tracker to generate the final footer
-            session_data = store.get_session(session_id)
-            cost_tracker = CostTracker()
+            current_request_tracker = CostTracker()
             # This tracker holds the cost/tokens for the CURRENT response
-            cost_tracker.update(final_stats_obj.input_tokens, final_stats_obj.output_tokens, final_stats_obj.estimated_cost)
+            current_request_tracker.update(final_stats_obj.input_tokens, final_stats_obj.output_tokens, final_stats_obj.estimated_cost)
+            
             # These attributes hold the CUMULATIVE data for the whole session
-            cost_tracker.session_cumulative_token = session_data.get('token_count', 0)
-            cost_tracker.session_cumulative_cost = session_data.get('total_cost', 0.0)
+            session_data = store.get_session(session_id)
+            cumulative_tokens = session_data.get('token_count', 0)
+            cumulative_cost = session_data.get('total_cost', 0.0)
 
-            diagnostics = cost_tracker.get_diagnostic_info(
+            diagnostics = current_request_tracker.get_diagnostic_info(
                 model_name=final_stats_obj.model_name,
+                cumulative_tokens=cumulative_tokens,
+                cumulative_cost=cumulative_cost,
                 output_text=final_stats_obj.full_answer,
                 is_debug=True
             )
@@ -290,14 +293,6 @@ def api_session_stats():
     # Get session ID from Flask g object
     session_id = getattr(g, 'session_id', 'default')
     session = store.get_session(session_id)
-
-    # Ensure the server-side session is synchronized with the client's history.
-    # This is crucial for ensuring all messages are persisted to SQLite.
-    data = request.json
-    history = data.get('history', [])
-    if history:
-        store.update_session(session_id, messages=history)
-        logger.debug(f"Updated session {session_id} with {len(history)} messages from client.")
     session_data = store.get_session(session_id)
     global_stats = store.get_global_stats()
     

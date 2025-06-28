@@ -19,9 +19,6 @@ class CostTracker:
         self._input_tokens = 0
         self._output_tokens = 0
         self._cost = 0.0
-        self.session_cumulative_token: Optional[int] = None
-        self.session_cumulative_cost: Optional[float] = None
-        self._model_name = None
     
     @property
     def input_tokens(self) -> int:
@@ -59,13 +56,30 @@ class CostTracker:
         self._output_tokens += output_tokens
         self._cost = new_cost
     
-    def get_diagnostic_info(self, model_name: str = None, input_text: str = None, 
+    def _format_cost(self, cost_usd: float) -> str:
+        """Formats cost in cents, showing more precision for small amounts."""
+        if abs(cost_usd) < 1e-9:  # Effectively zero
+            return "0.00美分"
+        
+        cents = cost_usd * 100
+        if cents < 0.01:
+            # For very small costs, show more decimal places to avoid rounding to 0.00
+            return f"{cents:.4f}美分"
+        else:
+            return f"{cents:.2f}美分"
+
+    def get_diagnostic_info(
+        self, 
+        model_name: str,
+        cumulative_tokens: int,
+        cumulative_cost: float,
                          output_text: str = None, is_debug: bool = False) -> str:
         """Generate formatted diagnostic information.
         
         Args:
-            model_name: Name of the model being used (optional)
-            input_text: Optional input text (for debug purposes)
+            model_name: Name of the model being used
+            cumulative_tokens: The total token count for the entire session.
+            cumulative_cost: The total cost for the entire session.
             output_text: Optional output text (for debug purposes)
             is_debug: Whether to include additional debug information
             
@@ -73,48 +87,13 @@ class CostTracker:
             str: Formatted diagnostic string with token counts and cost
         """
         try:
-            # Use provided model name or fall back to stored one
-            display_model = model_name or self._model_name or "unknown"
-            
-            # Determine which cost to display (cumulative or current)
-            display_cost = self.session_cumulative_cost if self.session_cumulative_cost is not None else self._cost
+            cost_display = self._format_cost(cumulative_cost)
 
-            def format_cost(cost_usd: float) -> str:
-                """
-                Format cost with appropriate units based on its value.
-
-                - If cost is effectively zero, return "0".
-                - If cost is less than 0.01 cents ($0.0001), display in integer picocents (1e-12 units).
-                - Otherwise, display in cents with two decimal places.
-                """
-                if abs(cost_usd) < 1e-15: # Use a smaller threshold for picodollar precision
-                    return "0"
-                
-                cents = cost_usd * 100
-                if cents < 0.01:
-                    picodollars = cost_usd * 1_000_000_000_000
-                    # If picodollars would round to 0, but the cost is non-zero, show 1 to indicate a small cost.
-                    if round(picodollars) == 0 and cost_usd > 0:
-                        return "1"
-                    return f"{int(round(picodollars))}"
-                else:
-                    return f"{cents:.2f}美分"
-
-            cost_display = format_cost(display_cost)
-
-            # Fallback for cumulative token display
-            total_tokens_display = self.session_cumulative_token if self.session_cumulative_token is not None else (self._input_tokens + self._output_tokens)
-
-            base_info = f"Model:{display_model}|CurrentTokens:{self._input_tokens + self._output_tokens}|TotalTokens:{total_tokens_display}|累计费用:{cost_display}"
+            base_info = f"Model:{model_name}|CurrentTokens:{self._input_tokens + self._output_tokens}|TotalTokens:{cumulative_tokens}|累计费用:{cost_display}"
             
             # Add debug information if requested
             if is_debug:
                 debug_info = []
-                if input_text is not None:
-                    input_sample = input_text[:50] + '...' if len(input_text) > 50 else input_text
-                    # 仅当input内容非空时添加
-                    if input_sample.strip() != '':
-                        debug_info.append(f"Input: '{input_sample}'")
                 # 不再添加 Output 部分
                 if debug_info:
                     base_info = f"{base_info} | {' | '.join(debug_info)}"
@@ -124,27 +103,6 @@ class CostTracker:
         except Exception as e:
             logger.error(f"Failed to generate diagnostics: {e}")
             return f"|Error generating diagnostics: {str(e)}|"
-
-    def to_dict(self):
-        return {
-            'input_tokens': self._input_tokens,
-            'output_tokens': self._output_tokens,
-            'cost': self._cost,
-            'session_cumulative_token': self.session_cumulative_token,
-            'session_cumulative_cost': self.session_cumulative_cost,
-            'model_name': self._model_name
-        }
-
-    @staticmethod
-    def from_dict(data):
-        ct = CostTracker()
-        ct._input_tokens = data['input_tokens']
-        ct._output_tokens = data['output_tokens']
-        ct._cost = data['cost']
-        ct.session_cumulative_token = data['session_cumulative_token']
-        ct.session_cumulative_cost = data['session_cumulative_cost']
-        ct._model_name = data['model_name']
-        return ct
 
 
 class PriceManager:
