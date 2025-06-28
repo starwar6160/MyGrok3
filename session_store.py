@@ -80,7 +80,7 @@ class InMemorySessionStore:
                     ON CONFLICT(session_id) DO UPDATE SET
                         session_data = excluded.session_data,
                         last_updated = excluded.last_updated;
-                ''', (session_id, json.dumps(session), datetime.now()))
+                ''', (session_id, json.dumps(session), datetime.now().isoformat()))
                 conn.commit()
 
     def add_message(self, session_id: str, message: Dict[str, Any]) -> None:
